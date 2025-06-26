@@ -16,4 +16,8 @@ router.get("/tokens-list",
     JoiMiddleWare(tokenSchema.getTokenList, "query"),
     tokenController.tokenListTokens);
 
+router.get("/token-data-list",
+    JoiMiddleWare(tokenSchema.getAddressData, "query"),
+    tokenController.getAllTokenlist);
+
 module.exports = router;

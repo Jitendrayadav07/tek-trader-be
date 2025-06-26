@@ -18,6 +18,14 @@ const tokenSchema = {
         sortBy: Joi.any().valid("id"),
         orderBy: Joi.any().valid("asc", "desc"),
     }),
+
+    getAddressData : Joi.object().keys({
+        count: Joi.number().default(10),
+        offset: Joi.number().default(0),
+        search: Joi.any(),
+        sortBy: Joi.any().valid(),
+        orderBy: Joi.any().valid("asc", "desc"),
+    }),
       
 }; 
 module.exports = tokenSchema
