@@ -1,6 +1,6 @@
-// models/ArenaTradeCoin.js
+// models/ArenaTokenCoin.js
 module.exports = (sequelize, DataTypes) => {
-    const ArenaTradeCoin = sequelize.define('arena_trade_coin', {
+    const ArenaTokenCoin = sequelize.define('arena-trade-coins', {
       id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
@@ -63,6 +63,6 @@ module.exports = (sequelize, DataTypes) => {
       underscored: true
     });
   
-    return ArenaTradeCoin;
+    return ArenaTokenCoin;
   };
   

@@ -1,6 +1,6 @@
 // models/ArenaTrade.js
 module.exports = (sequelize, DataTypes) => {
-    const ArenaTrade = sequelize.define('arena_trade', {
+    const ArenaTrade = sequelize.define('arena_trades', {
       id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
