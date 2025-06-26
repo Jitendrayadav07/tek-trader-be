@@ -1,7 +1,7 @@
 //models/ShillBoard.js'
 
 module.exports = (sequelize , DataTypes) => {
-    const shillBoard = sequelize.define('shill_board', {
+    const shillBoard = sequelize.define('shill_boards', {
       id: {
         type: DataTypes.UUID,
         defaultValue: DataTypes.UUIDV4,

@@ -1,6 +1,9 @@
 const axios = require('axios');
 const Response = require("../classes/Response");
 const db = require("../config/db.config");
+const DexScreenerService = require('../classes/pairAddress');
+const { Op, QueryTypes, where } = require("sequelize");
+
 
 const recentTokens = async (req, res) => {
     try {
@@ -175,7 +178,6 @@ const tokenListTokens = async (req, res) => {
       let { count, offset, search, sortBy, orderBy } = req.query;
       count = Number(count) || 10;
       offset = Number(offset) || 0;
-  
       let search_key = ``;
       if (search) {
         // Check if search input looks like a contract address (starts with 0x and 40 hex chars)
@@ -272,8 +274,50 @@ const tokenListTokens = async (req, res) => {
     }
 };
 
+const getAllTokenlist = async (req, res) => {
+  try {
+    let { count, offset, search, sortBy, orderBy } = req.query;
+   
+    let search_key = ``;
+
+    if (search) {
+      search_key = `WHERE (atc.symbol LIKE :search OR atc.name ILIKE :search OR atc.creator_address ILIKE :search)`;
+    } else {
+        search_key = ``;
+    }
+
+    let order_key = ``
+    if (sortBy && orderBy) {
+        order_key = `ORDER BY atc.${sortBy} ${orderBy.toUpperCase()}`
+    } else {
+        order_key = ``
+    }
+
+    let token_data = await db.sequelize.query(
+      `SELECT atc.symbol, atc.name , atc.creator_address , tm.photo_url FROM "arena-trade-coins" AS atc 
+      LEFT JOIN "token_metadata" AS tm ON LOWER(tm.contract_address) = LOWER(atc.contract_address)
+      ${search_key} ${order_key} LIMIT :count OFFSET :offset`, 
+      {
+        replacements: {
+          search: `%${search}%`,  
+          count: Number(count),
+          offset: Number(offset)  
+        }, 
+        type: QueryTypes.SELECT 
+      }
+    )
+    return res.status(200).send(Response.sendResponse(true, token_data, "Success"));
+  } catch (err) {
+    console.error("Error fetching token data by address:", err);
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+};
+
+
+
 module.exports = {
     recentTokens,
     pairTokenData,
-    tokenListTokens
+    tokenListTokens,
+    getAllTokenlist
 }
