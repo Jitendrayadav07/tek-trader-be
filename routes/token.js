@@ -16,8 +16,13 @@ router.get("/tokens-list",
     JoiMiddleWare(tokenSchema.getTokenList, "query"),
     tokenController.tokenListTokens);
 
-router.get("/token-data-list",
-    JoiMiddleWare(tokenSchema.getAddressData, "query"),
-    tokenController.getAllTokenlist);
+
+router.get("/my-holding-tokens",
+    JoiMiddleWare(tokenSchema.myHoldingTokensSchema, "query"),
+    tokenController.myHoldingTokens);
+
+router.get("/transaction-history/:contract_address",
+    JoiMiddleWare(tokenSchema.transactionContractAddressSchema, "query"),
+    tokenController.transactionBuySellHistory);
 
 module.exports = router;

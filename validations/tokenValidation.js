@@ -20,11 +20,14 @@ const tokenSchema = {
     }),
 
     getAddressData : Joi.object().keys({
-        count: Joi.number().default(10),
+        limit: Joi.number().default(10),
         offset: Joi.number().default(0),
-        search: Joi.any(),
-        sortBy: Joi.any().valid(),
-        orderBy: Joi.any().valid("asc", "desc"),
+        order: Joi.any(),
+    }),
+
+    transactionContractAddressSchema : Joi.object().keys({
+        limit: Joi.number().required(),
+        offset: Joi.number().required(),
     }),
       
 }; 

@@ -24,9 +24,6 @@ module.exports = (sequelize, DataTypes) => {
       price_after_eth: {
         type: DataTypes.DECIMAL
       },
-      absolute_value:{
-        type: DataTypes.DECIMAL
-      },
       block_number: {
         type: DataTypes.INTEGER
       },
