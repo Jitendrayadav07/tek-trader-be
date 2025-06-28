@@ -52,6 +52,18 @@ module.exports = (sequelize, DataTypes) => {
       },
       amount: {
         type: DataTypes.TEXT
+      },
+      tx_index: {
+        type: DataTypes.INTEGER
+      },
+      log_index: {
+        type: DataTypes.INTEGER
+      },
+      absolute_tx_position: {
+        type: DataTypes.BIGINT
+      },
+      tx_id: {
+        type: DataTypes.TEXT
       }
     }, {
       freezeTableName: true,

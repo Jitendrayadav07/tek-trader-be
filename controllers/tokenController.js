@@ -18,7 +18,6 @@ const ERC20_ABI = [
   "function decimals() view returns (uint8)"
 ];
 
-
 const recentTokens = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -31,14 +30,13 @@ const recentTokens = async (req, res) => {
     });
 
     const tokenIds = tokens.map((t) => t.internal_id);
-    
+
     const trades = await db.ArenaTrade.findAll({
       where: {
         token_id: {
           [Op.in]: tokenIds,
         },
       },
-      order: [["id", "ASC"]],
     });
 
     const tradeMap = {};
@@ -63,23 +61,29 @@ const recentTokens = async (req, res) => {
       tokens.map(async (token) => {
         const tokenTrades = tradeMap[token.internal_id] || [];
 
+        // 🟩 Calculate latest trade by absolute_tx_position
+        tokenTrades.sort((a, b) => {
+          const aPos = BigInt(a.absolute_tx_position || 0);
+          const bPos = BigInt(b.absolute_tx_position || 0);
+          return aPos > bPos ? 1 : aPos < bPos ? -1 : 0;
+        });
+
         const latestTrade = tokenTrades[tokenTrades.length - 1] || null;
+        const latest_trade_absolute_order = latestTrade?.absolute_tx_position || null;
 
-        const latest_trade_absolute_order = latestTrade?.id || null;
-
-        const latest_price_eth = latestTrade?.price
-          ? parseFloat(latestTrade.price) / 1e18
+        const latest_price_eth = latestTrade?.price_after_eth
+          ? parseFloat(latestTrade.price_after_eth)
           : 0;
 
         const latest_price_usd = latest_price_eth * avax_price;
 
+        // 🟩 Sum of transferred AVAX
         const latest_total_volume_eth = tokenTrades.reduce(
-          (sum, t) => sum + parseFloat(t.amount || 0) / 1e18,
+          (sum, t) => sum + parseFloat(t.transferred_avax || 0),
           0
         );
 
-        const latest_total_volume_usd =
-          latest_total_volume_eth * avax_price;
+        const latest_total_volume_usd = latest_total_volume_eth * avax_price;
 
         const latest_transaction_count = tokenTrades.length;
 
@@ -91,20 +95,21 @@ const recentTokens = async (req, res) => {
           where: { creator_address: token.creator_address },
         });
 
+        // 🟩 Calculate latest_supply_eth using BigInt
         const initialBuyAmount = tokenTrades
           .filter((t) => t.action === "initial buy")
-          .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
+          .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
 
         const totalBuyAmount = tokenTrades
           .filter((t) => t.action === "buy")
-          .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
+          .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
 
         const totalSellAmount = tokenTrades
           .filter((t) => t.action === "sell")
-          .reduce((sum, t) => sum + parseFloat(t.amount || 0), 0);
+          .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
 
-        const latest_supply_eth =
-          (initialBuyAmount + totalBuyAmount - totalSellAmount) / 1e18;
+        const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
+        const latest_supply_eth = Number(latest_supply_wei) / 1e18;
 
         const tokenMetadata = await db.TokenMetadata.findOne({
           where: { bc_group_id: token.internal_id },
@@ -133,19 +138,16 @@ const recentTokens = async (req, res) => {
           migration_time: null,
           migration_transaction_hash: null,
           photo_url: tokenMetadata?.photo_url || null,
+          description: tokenMetadata?.description || " ",
           creator_twitter_handle: tokenMetadata?.owner_twitter_handle || null,
-          creator_twitter_pfp_url:
-            tokenMetadata?.owner_twitter_picture || null,
-          latest_trade_absolute_order,
+          creator_twitter_pfp_url: tokenMetadata?.owner_twitter_picture || null,
+          creator_twitter_followers: tokenMetadata?.owner_twitter_followers || null,
+          latest_trade_absolute_order: Number(latest_trade_absolute_order),
           latest_price_eth: Number(latest_price_eth.toFixed(12)),
           latest_avax_price: Number(avax_price.toFixed(12)),
           latest_price_usd: Number(latest_price_usd.toFixed(12)),
-          latest_total_volume_eth: Number(
-            latest_total_volume_eth.toFixed(6)
-          ),
-          latest_total_volume_usd: Number(
-            latest_total_volume_usd.toFixed(6)
-          ),
+          latest_total_volume_eth: Number(latest_total_volume_eth.toFixed(6)),
+          latest_total_volume_usd: Number(latest_total_volume_usd.toFixed(6)),
           latest_transaction_count,
           latest_holder_count,
           latest_supply_eth: Number(latest_supply_eth.toFixed(6)),
@@ -160,9 +162,9 @@ const recentTokens = async (req, res) => {
       })
     );
 
-    return res
-      .status(200)
-      .send(Response.sendResponse(true, { offset, limit, items: responseList }, null, 200));
+    return res.status(200).send(
+      Response.sendResponse(true, { offset, limit, items: responseList }, null, 200)
+    );
   } catch (err) {
     console.error("Error fetching recent tokens:", err);
     return res
