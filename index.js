@@ -1,5 +1,5 @@
+const http = require("http");
 const express = require("express");
-const bodyParser = require("body-parser");
 const formData = require("express-form-data");
 const os = require("os");
 const cors = require("cors");
@@ -8,6 +8,7 @@ const cors = require("cors");
 const routes = require("./routes");
 
 const app = express();
+const server = http.createServer(app); 
 
 app.use(cors());
 
@@ -36,9 +37,15 @@ sequelizeDB.sequelize.sync(sequelizeDB);
 // Use routes
 app.use("/api", routes);
 
+// ======================
+// ✅ SOCKET.IO Setup
+// ======================
+const initSocket = require("./socket");
+initSocket(server); 
+
 
 // set port, listen for requests
 const PORT = 43000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}.`);
 });

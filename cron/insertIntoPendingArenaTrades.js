@@ -7,7 +7,7 @@ async function findInitialBuys() {
     
     // First, get all records from arena_trades_temp sorted by timestamp ASC
     const tempTrades = await db.ArenaTradeTemp.findAll({
-      order: [['timestamp', 'ASC']]
+      order: [['absolute_tx_position', 'ASC']]
     });
 
     console.log(`Found ${tempTrades.length} temp trades (sorted by timestamp ASC):`);
