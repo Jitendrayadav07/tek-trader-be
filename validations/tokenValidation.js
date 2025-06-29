@@ -29,6 +29,15 @@ const tokenSchema = {
         limit: Joi.number().required(),
         offset: Joi.number().required(),
     }),
+
+    arenaStartSchema: Joi.object().keys({
+        contract_address: Joi.string().required(),
+    }),
+
+    holdersTokensSchema : Joi.object().keys({
+        limit: Joi.number().required(),
+        offset: Joi.number().required(),
+    }),
       
 }; 
 module.exports = tokenSchema

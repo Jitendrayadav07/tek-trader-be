@@ -4,6 +4,8 @@ const db = require("../config/db.config");
 const DexScreenerService = require('../classes/pairAddress');
 const { ethers } = require("ethers");
 const { Op, QueryTypes, where } = require("sequelize");
+const Web3 = require("web3");
+const web3 = new Web3();
 
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
 
@@ -166,7 +168,6 @@ const recentTokens = async (req, res) => {
       Response.sendResponse(true, { offset, limit, items: responseList }, null, 200)
     );
   } catch (err) {
-    console.error("Error fetching recent tokens:", err);
     return res
       .status(500)
       .send(Response.sendResponse(false, null, "Error occurred", 500));
@@ -181,10 +182,335 @@ const pairTokenData =  async (req, res) => {
      const response = await axios.get(url);
      return res.status(200).send(Response.sendResponse(true,response.data.pair,null,200));
     }catch(err){
-     console.error("Error fetching token list:", err);
      return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
     }
 }
+
+const pairTokenDataNew = async (req, res) => {
+  try {
+    const { pairId } = req.params;
+    if (!pairId) {
+      return res.status(400).send(Response.sendResponse(false, null, "Pair address is required", 400));
+    }
+
+    const pairData = await db.sequelize.query(
+      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.creator_address, atc.internal_id, atc.supply
+       FROM "arena-trade-coins" AS atc
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
+      {
+        replacements: { pair_address: pairId },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    if (!pairData || pairData.length === 0) {
+      return res.status(404).send(Response.sendResponse(false, null, "Pair not found", 400));
+    }
+
+    const token = pairData[0];
+    let token_id = token.internal_id;
+
+    // Fetch trades for the token
+    let trades = await db.sequelize.query(
+      `SELECT * FROM "arena_trades" WHERE token_id = :token_id`, 
+      { 
+        replacements: { token_id: token_id },
+        type: db.Sequelize.QueryTypes.SELECT
+      }
+    );
+    let token_type = "prebonded"
+    // Fetch token metadata
+    let tokenMetadata = await db.TokenMetadata.findOne({  
+      where: { bc_group_id: token.internal_id },
+      attributes: ['photo_url', 'owner_twitter_handle', 'owner_twitter_picture', 'owner_banner_url'],
+    });
+ 
+    // Get current AVAX price in USD
+    const latestPriceRes = await db.sequelize.query(
+      `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
+      { type: db.Sequelize.QueryTypes.SELECT }
+    );
+
+    if (!latestPriceRes.length) {
+      throw new Error("AVAX price not found in avax_price_live table");
+    }
+    const avaxPriceUsd = parseFloat(latestPriceRes[0].price);
+
+    // ===== NEW: Get latest token price in AVAX and convert to USD =====
+    const latestTrade = await db.sequelize.query(
+      `SELECT transferred_avax, amount, avax_price 
+       FROM "arena_trades" 
+       WHERE token_id = :token_id 
+       ORDER BY timestamp DESC LIMIT 1`,
+      { 
+        replacements: { token_id: token.internal_id },
+        type: db.Sequelize.QueryTypes.SELECT 
+      }
+    );
+
+    let priceNative = "0";
+    let priceUsd = "0";
+    
+  if (latestTrade.length > 0) {
+    const transferredAvax = parseFloat(latestTrade[0].transferred_avax);
+    const tokenAmount = parseFloat(latestTrade[0].amount) / 1e18; 
+    priceNative = (transferredAvax / tokenAmount).toFixed(11); 
+    
+    // Calculate priceUsd
+    const currentAvaxPrice = latestTrade[0].avax_price || avaxPriceUsd;
+    priceUsd = (parseFloat(priceNative) * currentAvaxPrice).toFixed(11);
+  }
+
+    // ===== NEW: Calculate FDV and Market Cap =====
+    const totalSupply = token.supply || 0; // Using the supply field from your query
+    const fdv = priceUsd * totalSupply;
+    const marketCap = fdv; // Assuming circulating supply = total supply unless you have separate data
+
+    // Calculate transaction counts, volumes, and price changes
+    const txns = calculateTransactionCounts(trades);
+    const volumes = calculateTradingVolumes(trades);
+    const priceChange = calculatePriceChanges(trades, avaxPriceUsd);
+    
+    // Calculate volumes in USD
+    const volume = {
+      h24: parseFloat((volumes.h24 * avaxPriceUsd).toFixed(1)),
+      h6: parseFloat((volumes.h6 * avaxPriceUsd).toFixed(1)),
+      h1: parseFloat((volumes.h1 * avaxPriceUsd).toFixed(1)),
+      m5: parseFloat((volumes.m5 * avaxPriceUsd).toFixed(1))
+    };
+
+    // Prepare websites and socials arrays
+    const websites = tokenMetadata?.website_url ? [
+      {
+        label: "Website",
+        url: tokenMetadata.website_url
+      }
+    ] : [];
+
+    const socials = tokenMetadata?.owner_twitter_handle ? [
+      {
+        type: "twitter",
+        url: `https://x.com/${tokenMetadata.owner_twitter_handle}` || tokenMetadata.twitter_url
+      }
+    ] : [];
+
+    // Build the final response object
+    const result = {
+      token : token_type,
+      chainId: "avalanche",
+      dexId: "arenatrade",
+      url: `https://dexscreener.com/avalanche/${token.pair_address}`,
+      pairAddress: token.pair_address,
+      baseToken: {
+        address: token.contract_address,
+        name: token.name,
+        symbol: token.symbol,
+      },
+      quoteToken: {
+        address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+        name: "Wrapped AVAX",
+        symbol: "WAVAX",
+      },
+      priceNative: priceNative.toString(), // Use dynamically calculated price
+      priceUsd: priceUsd.toString(),      // Use dynamically calculated price
+      txns: txns,
+      volume: volume,
+      priceChange: priceChange,
+      liquidity: {
+        usd: 0,
+        base: 0,
+        quote: 0
+      },
+      fdv: fdv,               // Use calculated FDV
+      marketCap: marketCap,    // Use calculated Market Cap
+      pairCreatedAt: new Date().getTime(),
+      info: {
+        imageUrl: tokenMetadata?.photo_url || "", 
+        header: tokenMetadata?.owner_banner_url || "",
+        openGraph: "",
+        websites: websites,
+        socials: socials
+      }
+    };
+
+    return res.status(200).send({
+      isSuccess: true,
+      result,
+      message: null,
+      statusCode: 200
+    });
+
+  } catch (err) {
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+};
+
+function calculateTransactionCounts(trades) {
+  // Calculate current time and time thresholds
+  const now = new Date();
+  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  // Initialize counters
+  let txns = {
+    m5: { buys: 0, sells: 0 },
+    h1: { buys: 0, sells: 0 },
+    h6: { buys: 0, sells: 0 },
+    h24: { buys: 0, sells: 0 }
+  };
+
+  // Calculate transaction counts for each time period
+  trades.forEach(trade => {
+    const tradeTime = new Date(trade.timestamp);
+    
+    if (tradeTime >= twentyFourHoursAgo) {
+      if (trade.action === 'buy' || trade.action === 'initial buy') {
+        txns.h24.buys++;
+      } else if (trade.action === 'sell') {
+        txns.h24.sells++;
+      }
+      
+      if (tradeTime >= sixHoursAgo) {
+        if (trade.action === 'buy' || trade.action === 'initial buy') {
+          txns.h6.buys++;
+        } else if (trade.action === 'sell') {
+          txns.h6.sells++;
+        }
+        
+        if (tradeTime >= oneHourAgo) {
+          if (trade.action === 'buy' || trade.action === 'initial buy') {
+            txns.h1.buys++;
+          } else if (trade.action === 'sell') {
+            txns.h1.sells++;
+          }
+          
+          if (tradeTime >= fiveMinutesAgo) {
+            if (trade.action === 'buy' || trade.action === 'initial buy') {
+              txns.m5.buys++;
+            } else if (trade.action === 'sell') {
+              txns.m5.sells++;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  return txns;
+}
+
+function calculateTradingVolumes(trades) {
+  // Calculate current time and time thresholds
+  const now = new Date();
+  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
+  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+  const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  // Initialize volume counters (in AVAX)
+  let volumes = {
+    m5: 0,
+    h1: 0,
+    h6: 0,
+    h24: 0
+  };
+
+  // Calculate volumes for each time period
+  trades.forEach(trade => {
+    const tradeTime = new Date(trade.timestamp);
+    const avaxAmount = parseFloat(trade.transferred_avax) || 0;
+    
+    if (tradeTime >= twentyFourHoursAgo) {
+      volumes.h24 += avaxAmount;
+      
+      if (tradeTime >= sixHoursAgo) {
+        volumes.h6 += avaxAmount;
+        
+        if (tradeTime >= oneHourAgo) {
+          volumes.h1 += avaxAmount;
+          
+          if (tradeTime >= fiveMinutesAgo) {
+            volumes.m5 += avaxAmount;
+          }
+        }
+      }
+    }
+  });
+
+  return volumes;
+}
+
+function calculatePriceChanges(trades, avaxPriceUsd) {
+  if (!trades || trades.length < 2) {
+    return { m5: 0, h1: 0, h6: 0, h24: 0 };
+  }
+
+  // Process trades with proper price calculation
+  const validTrades = trades.map(t => {
+    try {
+      // Calculate price in AVAX (amount is in token units)
+      const priceAvax = parseFloat(t.amount) > 0 ? 
+        parseFloat(t.transferred_avax || 0) / parseFloat(t.amount) : 
+        0;
+      
+      // Convert to USD
+      const priceUsd = priceAvax * avaxPriceUsd;
+
+      return {
+        ...t,
+        timestamp: new Date(t.timestamp),
+        price: priceUsd
+      };
+    } catch (e) {
+      return null;
+    }
+  }).filter(t => t && !isNaN(t.price) && t.price > 0)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (validTrades.length < 2) {
+    return { m5: 0, h1: 0, h6: 0, h24: 0 };
+  }
+
+  const now = new Date();
+  const currentPrice = validTrades[validTrades.length - 1].price;
+
+  // Time thresholds
+  const periods = {
+    m5: new Date(now - 5 * 60 * 1000),    // 5 minutes ago
+    h1: new Date(now - 60 * 60 * 1000),    // 1 hour ago
+    h6: new Date(now - 6 * 60 * 60 * 1000), // 6 hours ago
+    h24: new Date(now - 24 * 60 * 60 * 1000) // 24 hours ago
+  };
+
+  // Calculate price changes
+  const priceChange = {};
+  for (const [period, cutoff] of Object.entries(periods)) {
+    // Find the first trade after the cutoff
+    const periodTrades = validTrades.filter(t => t.timestamp >= cutoff);
+    
+    if (periodTrades.length === 0) {
+      // If no trades in period, look for the closest older trade
+      const olderTrades = validTrades.filter(t => t.timestamp < cutoff);
+      if (olderTrades.length > 0) {
+        priceChange[period] = ((currentPrice - olderTrades[olderTrades.length - 1].price) / 
+                             olderTrades[olderTrades.length - 1].price) * 100;
+      } else {
+        priceChange[period] = 0;
+      }
+    } else {
+      const startPrice = periodTrades[0].price;
+      priceChange[period] = ((currentPrice - startPrice) / startPrice) * 100;
+    }
+
+    // Round to 2 decimal places
+    priceChange[period] = parseFloat(priceChange[period].toFixed(2));
+  }
+
+  return priceChange;
+}
+
 
 const tokenListTokens = async (req, res) => {
     try {
@@ -197,14 +523,14 @@ const tokenListTokens = async (req, res) => {
         const isAddress = /^0x[a-fA-F0-9]{40}$/.test(search.trim());
       
         if (isAddress) {
-          search_key = `AND LOWER(atc.pair_address) = LOWER(:search)`;
+          search_key = `AND LOWER(atc.contract_address) = LOWER(:search) OR LOWER(atc.pair_address) = LOWER(:search)`;
         } else {
           search_key = `AND (atc.symbol ILIKE :search OR atc.name ILIKE :search)`;
         }
       }
   
       // Whitelist allowed fields for sorting to prevent SQL injection
-      const allowedSortFields = ['pair_address', 'symbol', 'name', 'id'];
+      const allowedSortFields = ['contract_address', 'symbol', 'name', 'id', 'pair_address'];
       const allowedOrderDirections = ['ASC', 'DESC'];
   
       // Fallbacks and sanitization
@@ -251,8 +577,7 @@ const tokenListTokens = async (req, res) => {
           type: db.Sequelize.QueryTypes.SELECT,
         }
       );
-    
-      // console.log("Token Data:", token_data);
+  
   
       await Promise.all(token_data.map(async (token) => {
         if (token.pair_address) {
@@ -282,11 +607,9 @@ const tokenListTokens = async (req, res) => {
       );
   
     } catch (err) {
-      console.error("Error fetching token list:", err);
       return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
     }
 };
-
 
 const myHoldingTokens = async (req, res) => {
   try {
@@ -295,85 +618,330 @@ const myHoldingTokens = async (req, res) => {
     if (!wallet_address || !pair_address) {
       return res.status(400).send(Response.sendResponse(false, null, "Missing parameters", 400));
     }
-    const walletDataList = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.creator_address
-       FROM "arena-trade-coins" AS atc
-       WHERE LOWER(atc.creator_address) = LOWER(:wallet_address) AND LOWER(atc.pair_address) = LOWER(:pair_address)`,
+
+    // Query to get token holdings data
+    const response = await db.sequelize.query(
+      `SELECT atc.pair_address,atc.contract_address,at.from_address,at.amount,atc.name,tm.photo_url AS photo_url
+       FROM "arena_trades" AS at 
+       LEFT JOIN "arena-trade-coins" AS atc ON at.token_id = atc.internal_id 
+       LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
+       WHERE LOWER(at.from_address) = LOWER(:wallet_address)
+       AND LOWER(atc.pair_address) = LOWER(:pair_address) LIMIT 1;`,
       {
         replacements: {
           wallet_address: wallet_address.toLowerCase(),
           pair_address: pair_address.toLowerCase()
         },
-        type: db.Sequelize.QueryTypes.SELECT,
+        type: db.sequelize.QueryTypes.SELECT,
       }
     );
-    
-    const walletData = walletDataList[0]; // get first row
- 
-    if (!walletData) {
-      return res.status(404).send(Response.sendResponse(false, null, "Wallet address not found in trades", 404));
+
+    if (!response || response.length === 0) {
+      return res.status(404).send(Response.sendResponse(false, null, "No holdings found for this wallet and pair address", 404));
     }
 
-    const { creator_address, contract_address, symbol } = walletData;
-
-    const contract = new ethers.Contract(contract_address, ERC20_ABI, provider);
+    const contract = new ethers.Contract(response[0].contract_address, ERC20_ABI, provider);
     const [balance, decimals] = await Promise.all([
-      contract.balanceOf(creator_address),
+      contract.balanceOf(response[0].from_address),
       contract.decimals()
     ]);
 
-    const formatted = ethers.formatUnits(balance, decimals);
-    const balanceNum = parseFloat(formatted);
+    const formattedBalance = ethers.formatUnits(balance, decimals);
+    response[0].amount = formattedBalance;
 
-    const priceRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${contract_address}`);
-    if (!priceRes.ok) throw new Error(`DexScreener API error: ${priceRes.statusText}`);
-    const json = await priceRes.json();
+    let usdPrice = 0;
+    response[0].priceUsd = usdPrice;
 
-    const priceUsd = parseFloat(json.pairs?.[0]?.priceUsd || 0);
-    const usdValue = balanceNum * priceUsd;
-
-    return res.status(200).send(Response.sendResponse(true, {balance: formatted,symbol,usdValue: usdValue.toFixed(2),contractAddress: contract_address}, "My Holding Data", 200));
+    return res.status(200).send(Response.sendResponse(
+      true, 
+      response,
+      "Data retrieved", 
+      200
+    ));
 
   } catch (err) {
-    console.error("Error in myHoldingTokens:", err);
     return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
   }
 };
 
-const transactionBuySellHistory = async (req, res) => {
+const holdersTokens = async (req, res) => {
   try {
-    const { contract_address } = req.params;
-
-    const { limit = 10, offset = 0 } = req.query;
-
-    if (!contract_address) {
-      return res.status(400).send(Response.sendResponse(false, null, "Contract address is required", 400));
+    const { pair_address } = req.params;
+    const { limit, offset } = req.query;
+    if (!pair_address) {
+      return res.status(400).send(Response.sendResponse(false, null, "Missing pair address parameter", 400));
     }
 
-    let response = await db.sequelize.query(
-      `SELECT atc.id, atc.contract_address, atc.symbol, atc.name , at.from_address , at.amount , at.action 
-       FROM "arena-trade-coins" AS atc 
-       LEFT JOIN "arena_trades" AS at ON atc.internal_id = at.token_id
-       WHERE LOWER(atc.contract_address) = LOWER(:contract_address)
-       LIMIT :limit OFFSET :offset`,
+    // let pairAddress = pair_address.toLowerCase();
+    const response = await db.sequelize.query(
+      `SELECT at.from_address, atc.pair_address, atc.contract_address, atc.internal_id ,atc.supply
+        FROM "arena-trade-coins" AS atc
+        LEFT JOIN "arena_trades" AS at ON at.token_id = atc.internal_id
+        WHERE LOWER(pair_address) = LOWER(:pair_address)
+        GROUP BY at.from_address, atc.pair_address, atc.contract_address, atc.internal_id,atc.supply
+        LIMIT :limit OFFSET :offset`,
+      {
+        replacements: { pair_address: pair_address  , limit: Number(limit) || 10, offset: Number(offset) || 0 },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );  
+    for (let i = 0; i < response.length; i++) {
+      const contract = new ethers.Contract(response[i].contract_address, ERC20_ABI, provider);
+      const [balance, decimals] = await Promise.all([
+        contract.balanceOf(response[i].from_address),
+        contract.decimals()
+      ]);
+      const formattedBalance = ethers.formatUnits(balance, decimals);
+      const formattedSupply = ethers.formatUnits(BigInt(response[i].supply), decimals);
+      const percentOfSupply = (Number(formattedBalance) / Number(formattedSupply)) * 100;
+      response[i].amount = formattedBalance;
+      response[i].percentOfSupply = percentOfSupply.toFixed(2);
+    }
+
+    return res.status(200).send(Response.sendResponse(true, {response}, "Holders Data", 200));
+  } catch (err) {
+    return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
+  }
+};
+
+
+const transactionBuySellHistory = async (req, res) => {
+  try {
+    const { pair_address } = req.params;
+    const limit = Number(req.query.limit) || 10;
+    const offset = Number(req.query.offset) || 0;
+
+    const walletDataList = await db.sequelize.query(
+      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.creator_address
+       FROM "arena-trade-coins" AS atc
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
       {
         replacements: {
-          contract_address: contract_address.toLowerCase(),
-          limit: Number(limit),
-          offset: Number(offset)
+          pair_address: pair_address.toLowerCase()
         },
         type: db.Sequelize.QueryTypes.SELECT,
       }
     );
 
-    if (response.length === 0) {
-      return res.status(404).send(Response.sendResponse(false, null, "No trades found for this contract address", 404));
+    if (!pair_address) {
+      return res.status(400).send(
+        Response.sendResponse(false, null, "Contract address is required", 400)
+      );
     }
 
-    return res.status(200).send(Response.sendResponse(true, response, "Trade history fetched successfully", 200));
+    let contract_address = walletDataList[0]?.contract_address;
+
+    const tradeData = await db.sequelize.query(
+      `
+      SELECT 
+        at.id AS row_id,
+        atc.contract_address,
+        at.from_address AS user_address,
+        at.amount,
+        at.token_id,
+        at.action,
+        at.timestamp,
+        at.transferred_avax
+      FROM "arena-trade-coins" AS atc 
+      LEFT JOIN "arena_trades" AS at ON atc.internal_id = at.token_id
+      WHERE LOWER(atc.contract_address) = LOWER(:contract_address)
+      ORDER BY at.timestamp DESC
+      LIMIT :limit OFFSET :offset
+      `,
+      {
+        replacements: {
+          contract_address: contract_address.toLowerCase(),
+          limit,
+          offset,
+        },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+
+    const formattedItems = tradeData.map(item => {
+      let humanReadable = web3.utils.fromWei(item.amount.toString(), 'ether'); 
+      let formattedAmount = Number(humanReadable).toLocaleString("en-US");
+      let formattedAvax = parseFloat(item.transferred_avax).toFixed(2);
+      return {
+        ...item,
+        amount: formattedAmount,
+        transferred_avax: formattedAvax
+      };
+    });
+
+    return res.status(200).send(
+      Response.sendResponse(true, {
+        offset,
+        limit,
+        items: formattedItems,
+      }, "Trade history fetched successfully", 200)
+    );
   } catch (err) {
-    console.error("Error in transactionBuySellHistory:", err);
-    return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
+    return res.status(500).send(
+      Response.sendResponse(false, null, "Internal Server Error", 500)
+    );
+  }
+};
+
+const arenaStartController = async (req, res) => {
+  try {
+    const { contract_address } = req.query;
+
+    if (!contract_address) {
+      return res.status(400).send(
+        Response.sendResponse(false, null, "Missing Token", 400)
+      );
+    }
+
+    let token = 'eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjp7ImlkIjoiZmFiN2Q5ZjEtNWRlZC00N2YyLWI2NTEtM2Q3YmY4ZGNhZjgxIiwidHdpdHRlcklkIjoiNzk2MjQ0Nzg2OTQwNDE2MDAxIiwidHdpdHRlckhhbmRsZSI6ImFzaHVfY2hpa2FuZSIsInR3aXR0ZXJOYW1lIjoiQXNoaXNoIENoaWthbmXwn5S6IiwidHdpdHRlclBpY3R1cmUiOiJodHRwczovL3N0YXRpYy5zdGFyc2FyZW5hLmNvbS91cGxvYWRzLzkwZTc5ZWE3LTNhMDMtZjMxMi0yY2Y5LWNhYmI4OGMzY2Y1NDE3Mjk0ODQ0OTU4MzcucG5nIiwiYWRkcmVzcyI6IjB4ZDUyNjczZjQ2MjBkNzhiOGVhZmI5NTg1OTM1NzIzNjFiY2I2MzAzOCJ9LCJpYXQiOjE3NDk0NDMwNDMsImV4cCI6MTc1ODA4MzA0M30.SzALMP6gjisWvBAeoRcYLsP1wIKmzsyiN3hPxN0b7AfSGaj3GhIk2ZxV2Z0U14mQGfZ_vwHNbuiUp51ATZ0kb0X9TltGI0Ih1pwv-Bdid5-pzXZWO5Xvw0mFa3tOaFklukYF2mqD8blacxlng9n6IlNYhAVIEYxrTu33Bx9onulYwez88PFxAj7X3dBlLNyEMEu-vyahEVjaFHH4Fe4oaMHEXawRsLXz1j-nH64lY79RBwxC-1TwiYslfedrJ8zZ02WAFRdI8CgGzoOj9kD6mgznLXjDcKh5u5tRwsC3u6YpsvxwhWGZA7sGngsrYEpYYVFJAuBlFfA88BOwfRUdsGFCyCwHA8WZP_B-xZBqTpm_gKwtPo--cE9VxZjZxzSS1-8NKru6APCiJPQchZdJSTsDQVgdC_qtqrEufI_orU0sUuIQ0NzPe6yDk9nT8B6OvVL84OTau1XouRCvP4FR8gCtjm6dCWSmPfWytljXl867wrQkePTvtz-1SU5fjMcrm5hfbLiXl2NCa3SQhbQMZCeKCifBqfD9qvkVteT0LM728_0QK4E0iDWuOf7D5Pf2B7_RRn5PJn7WFJVJydOkyBB1tvUYHc_rR5RUoNoQtT84vwoX_w47FmdW3YtVJRf3fqJ3S_B5aVtBYr36DjupF7gRUs0aGqa8wGzO8fptBT0'
+
+    const [avaxRes, tokenRes] = await Promise.all([
+      axios.get('https://api.starsarena.com/currency/avax', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }),
+      axios.get(
+        `https://api.starsarena.com/communities/get-community-profile-candidate?param=${contract_address}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      ),
+    ]);
+
+    return res.status(200).send({
+      isSuccess: true,
+      statusCode: 200,
+      message: 'Data fetched successfully',
+      result: {
+        avaxData: avaxRes.data,
+        tokenData: tokenRes.data,
+      },
+    });
+  } catch (error) {
+    return res.status(500).send({
+      isSuccess: false,
+      message: 'Failed to fetch data from StarsArena API',
+      statusCode: 500,
+    });
+  }
+};
+
+const tokenTradeAnalysisData = async (req, res) => {
+  try {
+    const { pair_address } = req.params;
+    if (!pair_address) {
+      return res
+        .status(400)
+        .send(Response.sendResponse(false, null, "Contract address is required", 400));
+    }
+
+    const walletDataList = await db.sequelize.query(
+      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.creator_address
+       FROM "arena-trade-coins" AS atc
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
+      {
+        replacements: {
+          pair_address: pair_address.toLowerCase()
+        },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    let contract_address = walletDataList[0]?.contract_address;
+
+    const url = `https://api.arenapro.io/rpc/token_trade_analytics?in_token_contract_address=${contract_address}&in_time_period=24h`;
+
+    const response = await axios.get(url);
+
+    return res.status(200).send(
+      Response.sendResponse(true, response.data, "Token trade analytics fetched successfully", 200)
+    );
+  } catch (err) {
+
+    return res
+      .status(500)
+      .send(Response.sendResponse(false, null, "Internal Server Error", 500));
+  }
+};
+
+const tokenOhlcData = async (req, res) => {
+  try {
+    const { pair_address } = req.params;
+    const { in_timeframe = '5m' } = req.query;
+
+    if (!pair_address) {
+      return res
+        .status(400)
+        .send(Response.sendResponse(false, null, "Contract address is required", 400));
+    }
+
+    const walletDataList = await db.sequelize.query(
+      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.creator_address
+       FROM "arena-trade-coins" AS atc
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
+      {
+        replacements: {
+          pair_address: pair_address.toLowerCase()
+        },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    let contract_address = walletDataList[0]?.contract_address;
+
+    const url = `https://api.arenapro.io/rpc/token_ohlc?in_token_contract_address=${contract_address}&in_timeframe=${in_timeframe}`;
+
+    const response = await axios.get(url);
+
+    return res.status(200).send(
+      Response.sendResponse(true, response.data, "Token OHLC data fetched successfully", 200)
+    );
+  } catch (err) {
+
+    return res
+      .status(500)
+      .send(Response.sendResponse(false, null, "Internal Server Error", 500));
+  }
+};
+
+const communitiesTopController = async (req, res) => {
+  try {
+    const response = await axios.get(
+      'https://api.starsarena.com/communities/top',
+      {
+        headers: {
+          'Authorization': `Bearer eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjp7ImlkIjoiZmFiN2Q5ZjEtNWRlZC00N2YyLWI2NTEtM2Q3YmY4ZGNhZjgxIiwidHdpdHRlcklkIjoiNzk2MjQ0Nzg2OTQwNDE2MDAxIiwidHdpdHRlckhhbmRsZSI6ImFzaHVfY2hpa2FuZSIsInR3aXR0ZXJOYW1lIjoiQXNoaXNoIENoaWthbmXwn5S6IiwidHdpdHRlclBpY3R1cmUiOiJodHRwczovL3N0YXRpYy5zdGFyc2FyZW5hLmNvbS91cGxvYWRzLzkwZTc5ZWE3LTNhMDMtZjMxMi0yY2Y5LWNhYmI4OGMzY2Y1NDE3Mjk0ODQ0OTU4MzcucG5nIiwiYWRkcmVzcyI6IjB4ZDUyNjczZjQ2MjBkNzhiOGVhZmI5NTg1OTM1NzIzNjFiY2I2MzAzOCJ9LCJpYXQiOjE3NDk0NDMwNDMsImV4cCI6MTc1ODA4MzA0M30.SzALMP6gjisWvBAeoRcYLsP1wIKmzsyiN3hPxN0b7AfSGaj3GhIk2ZxV2Z0U14mQGfZ_vwHNbuiUp51ATZ0kb0X9TltGI0Ih1pwv-Bdid5-pzXZWO5Xvw0mFa3tOaFklukYF2mqD8blacxlng9n6IlNYhAVIEYxrTu33Bx9onulYwez88PFxAj7X3dBlLNyEMEu-vyahEVjaFHH4Fe4oaMHEXawRsLXz1j-nH64lY79RBwxC-1TwiYslfedrJ8zZ02WAFRdI8CgGzoOj9kD6mgznLXjDcKh5u5tRwsC3u6YpsvxwhWGZA7sGngsrYEpYYVFJAuBlFfA88BOwfRUdsGFCyCwHA8WZP_B-xZBqTpm_gKwtPo--cE9VxZjZxzSS1-8NKru6APCiJPQchZdJSTsDQVgdC_qtqrEufI_orU0sUuIQ0NzPe6yDk9nT8B6OvVL84OTau1XouRCvP4FR8gCtjm6dCWSmPfWytljXl867wrQkePTvtz-1SU5fjMcrm5hfbLiXl2NCa3SQhbQMZCeKCifBqfD9qvkVteT0LM728_0QK4E0iDWuOf7D5Pf2B7_RRn5PJn7WFJVJydOkyBB1tvUYHc_rR5RUoNoQtT84vwoX_w47FmdW3YtVJRf3fqJ3S_B5aVtBYr36DjupF7gRUs0aGqa8wGzO8fptBT0`
+        }
+      }
+    );
+    return res.status(200).send({
+      isSuccess: true,
+      result: response.data,
+      message: null,
+      statusCode: 200
+    });
+  } catch (err) {
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+};
+
+const getInternalIdByPairAddressData = async (req,res) => {
+  try {
+     let { pair_address } = req.params;
+    const response = await db.sequelize.query(
+      `SELECT internal_id FROM "arena-trade-coins" WHERE LOWER(pair_address) = LOWER(:pair_address)`,
+      {
+        replacements: { pair_address: pair_address.toLowerCase() },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+    return res.status(200).send(Response.sendResponse(true,response,null,200));
+  } catch (err) {
+    return res.status(500).send(Response.sendResponse(false,null,"Error fetching internal ID by pair address:",500));
   }
 };
 
@@ -381,7 +949,14 @@ const transactionBuySellHistory = async (req, res) => {
 module.exports = {
     recentTokens,
     pairTokenData,
+    pairTokenDataNew,
     tokenListTokens,
     myHoldingTokens,
-    transactionBuySellHistory
+    transactionBuySellHistory,
+    arenaStartController,
+    tokenTradeAnalysisData,
+    tokenOhlcData,
+    communitiesTopController,
+    holdersTokens,
+    getInternalIdByPairAddressData
 }
