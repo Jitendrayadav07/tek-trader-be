@@ -1,6 +1,5 @@
-// models/ArenaTrade.js
 module.exports = (sequelize, DataTypes) => {
-    const ArenaTrade = sequelize.define('arena_trades', {
+    const ArenaTradeTemp = sequelize.define('arena_trades_temp', {
       id: {
         type: DataTypes.INTEGER,
         primaryKey: true,
@@ -71,6 +70,5 @@ module.exports = (sequelize, DataTypes) => {
       underscored: true
     });
   
-    return ArenaTrade;
-  };
-  
+    return ArenaTradeTemp;
+  }; 
