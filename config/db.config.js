@@ -1,7 +1,7 @@
 // config/db.config.js
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });  // ✅ explicit path
 const { Sequelize } = require("sequelize");
-require("dotenv").config();
-
 //Localhost Databse Connection
 const sequelize = new Sequelize(
     process.env.TEK_DB,
