@@ -9,7 +9,7 @@ function initSocket(server) {
   const io = new Server(server, {
     path: '/ws',
     cors: {
-      origin: "https://tek.pharmaalabs.com",  
+      origin: "*",  
       methods: ["GET", "POST"],
     },
   });
