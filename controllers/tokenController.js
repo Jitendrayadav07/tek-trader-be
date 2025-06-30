@@ -679,15 +679,12 @@ const myHoldingTokens = async (req, res) => {
 
     // Query to get token holdings data
     const response = await db.sequelize.query(
-      `SELECT atc.pair_address,atc.contract_address,at.from_address,at.amount,atc.name,tm.photo_url AS photo_url
-       FROM "arena_trades" AS at 
-       LEFT JOIN "arena-trade-coins" AS atc ON at.token_id = atc.internal_id 
+      `SELECT atc.pair_address,atc.contract_address,atc.name,tm.photo_url AS photo_url
+       FROM "arena-trade-coins" AS atc
        LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
-       WHERE LOWER(at.from_address) = LOWER(:wallet_address)
-       AND LOWER(atc.pair_address) = LOWER(:pair_address) LIMIT 1;`,
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address) LIMIT 1;`,
       {
         replacements: {
-          wallet_address: wallet_address.toLowerCase(),
           pair_address: pair_address.toLowerCase()
         },
         type: db.sequelize.QueryTypes.SELECT,
@@ -695,12 +692,12 @@ const myHoldingTokens = async (req, res) => {
     );
 
     if (!response || response.length === 0) {
-      return res.status(404).send(Response.sendResponse(false, null, "No holdings found for this wallet and pair address", 404));
+      return res.status(400).send(Response.sendResponse(false, null, "Token Not Found", 400));
     }
 
     const contract = new ethers.Contract(response[0].contract_address, ERC20_ABI, provider);
     const [balance, decimals] = await Promise.all([
-      contract.balanceOf(response[0].from_address),
+      contract.balanceOf(wallet_address.toLowerCase()),
       contract.decimals()
     ]);
 
@@ -718,7 +715,7 @@ const myHoldingTokens = async (req, res) => {
     ));
 
   } catch (err) {
-    console.log("eee",err)
+    // console.log("eee",err)
     return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
   }
 };
