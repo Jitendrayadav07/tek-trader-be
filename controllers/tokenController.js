@@ -24,8 +24,22 @@ const recentTokens = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     const offset = parseInt(req.query.offset) || 0;
+    const search = req.query.search || "";
+
+    const whereCondition = search
+  ? {
+      [Op.or]: [
+        { name: { [Op.iLike]: `%${search}%` } },
+        { symbol: { [Op.iLike]: `%${search}%` } },
+        { contract_address: { [Op.iLike]: `%${search}%` } },
+        { pair_address: { [Op.iLike]: `%${search}%` } },
+      ],
+    }
+  : {};
+
 
     const tokens = await db.ArenaTradeCoins.findAll({
+      where: whereCondition,
       order: [["internal_id", "DESC"]],
       limit,
       offset,
@@ -168,6 +182,7 @@ const recentTokens = async (req, res) => {
       Response.sendResponse(true, { offset, limit, items: responseList }, null, 200)
     );
   } catch (err) {
+    console.error("Error in recentTokens:", err);
     return res
       .status(500)
       .send(Response.sendResponse(false, null, "Error occurred", 500));
