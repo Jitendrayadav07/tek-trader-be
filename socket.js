@@ -9,11 +9,11 @@ function initSocket(server) {
   const io = new Server(server, {
     path: '/ws',
     cors: {
-      origin: "http://localhost:43000", 
+      origin: "https://tek.pharmaalabs.com",  
       methods: ["GET", "POST"],
     },
   });
-
+  
   io.on("connection", (socket) => {
     const userId = socket.handshake.auth.userId;
 
