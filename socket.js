@@ -9,7 +9,7 @@ function initSocket(server) {
   const io = new Server(server, {
     path: '/ws',
     cors: {
-      origin: "*", // update this in prod
+      origin: "http://34.47.217.45", // update this in prod
       methods: ["GET", "POST"],
     },
   });
@@ -24,7 +24,7 @@ function initSocket(server) {
       return;
     }
 
-    console.log(`🔌 User connected: ${socket.id} (userId: ${userId})`);
+    console.log(`User connected: ${socket.id} (userId: ${userId})`);
     connectedUsers.set(socket.id, userId);
 
     io.emit("user_joined", { userId });

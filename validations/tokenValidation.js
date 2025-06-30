@@ -38,6 +38,11 @@ const tokenSchema = {
         limit: Joi.number().required(),
         offset: Joi.number().required(),
     }),
+
+    preBondedTokensSchema : Joi.object().keys({
+        wallet_address: Joi.string().required(),
+        contract_address : Joi.string().required(),
+    }),
       
 }; 
 module.exports = tokenSchema

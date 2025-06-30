@@ -178,7 +178,7 @@ const pairTokenData =  async (req, res) => {
     try{
      const { pairId } = req.params;
      const url = `https://api.dexscreener.com/latest/dex/pairs/avalanche/${pairId}`;
- 
+
      const response = await axios.get(url);
      return res.status(200).send(Response.sendResponse(true,response.data.pair,null,200));
     }catch(err){
@@ -190,12 +190,15 @@ const pairTokenDataNew = async (req, res) => {
   try {
     const { pairId } = req.params;
     if (!pairId) {
-      return res.status(400).send(Response.sendResponse(false, null, "Pair address is required", 400));
+      return res
+        .status(400)
+        .send(Response.sendResponse(false, null, "Pair address is required", 400));
     }
 
+    // Query your DB
     const pairData = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.creator_address, atc.internal_id, atc.supply
-       FROM "arena-trade-coins" AS atc
+      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.creator_address, atc.internal_id, atc.supply ,atc.system_created
+       FROM "arena-trade-coins" AS atc 
        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
       {
         replacements: { pair_address: pairId },
@@ -204,312 +207,352 @@ const pairTokenDataNew = async (req, res) => {
     );
 
     if (!pairData || pairData.length === 0) {
-      return res.status(404).send(Response.sendResponse(false, null, "Pair not found", 400));
+      return res
+        .status(404)
+        .send(Response.sendResponse(false, null, "Pair not found", 404));
     }
 
     const token = pairData[0];
-    let token_id = token.internal_id;
 
-    // Fetch trades for the token
-    let trades = await db.sequelize.query(
-      `SELECT * FROM "arena_trades" WHERE token_id = :token_id`, 
-      { 
-        replacements: { token_id: token_id },
-        type: db.Sequelize.QueryTypes.SELECT
+    const token_data = await db.sequelize.query(
+      `SELECT atc.pair_address, atc.contract_address, atc.supply, at.token_id, atc.internal_id, 
+              at.action, at.from_address, at.amount, atc.name, at.timestamp, at.status
+       FROM "arena_trades" AS at 
+       LEFT JOIN "arena-trade-coins" AS atc ON at.token_id = atc.internal_id 
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
+      {
+        replacements: { pair_address: token.pair_address },
+        type: db.Sequelize.QueryTypes.SELECT,
       }
     );
     let token_type = "prebonded"
-    // Fetch token metadata
-    let tokenMetadata = await db.TokenMetadata.findOne({  
-      where: { bc_group_id: token.internal_id },
-      attributes: ['photo_url', 'owner_twitter_handle', 'owner_twitter_picture', 'owner_banner_url'],
-    });
- 
-    // Get current AVAX price in USD
-    const latestPriceRes = await db.sequelize.query(
-      `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
-      { type: db.Sequelize.QueryTypes.SELECT }
-    );
+    // ✅ Calculate txns for m5, h1, h6, h24
+    const now = new Date();
 
-    if (!latestPriceRes.length) {
-      throw new Error("AVAX price not found in avax_price_live table");
-    }
-    const avaxPriceUsd = parseFloat(latestPriceRes[0].price);
-
-    // ===== NEW: Get latest token price in AVAX and convert to USD =====
-    const latestTrade = await db.sequelize.query(
-      `SELECT transferred_avax, amount, avax_price 
-       FROM "arena_trades" 
-       WHERE token_id = :token_id 
-       ORDER BY timestamp DESC LIMIT 1`,
-      { 
-        replacements: { token_id: token.internal_id },
-        type: db.Sequelize.QueryTypes.SELECT 
-      }
-    );
-
-    let priceNative = "0";
-    let priceUsd = "0";
-    
-  if (latestTrade.length > 0) {
-    const transferredAvax = parseFloat(latestTrade[0].transferred_avax);
-    const tokenAmount = parseFloat(latestTrade[0].amount) / 1e18; 
-    priceNative = (transferredAvax / tokenAmount).toFixed(11); 
-    
-    // Calculate priceUsd
-    const currentAvaxPrice = latestTrade[0].avax_price || avaxPriceUsd;
-    priceUsd = (parseFloat(priceNative) * currentAvaxPrice).toFixed(11);
-  }
-
-    // ===== NEW: Calculate FDV and Market Cap =====
-    const totalSupply = token.supply || 0; // Using the supply field from your query
-    const fdv = priceUsd * totalSupply;
-    const marketCap = fdv; // Assuming circulating supply = total supply unless you have separate data
-
-    // Calculate transaction counts, volumes, and price changes
-    const txns = calculateTransactionCounts(trades);
-    const volumes = calculateTradingVolumes(trades);
-    const priceChange = calculatePriceChanges(trades, avaxPriceUsd);
-    
-    // Calculate volumes in USD
-    const volume = {
-      h24: parseFloat((volumes.h24 * avaxPriceUsd).toFixed(1)),
-      h6: parseFloat((volumes.h6 * avaxPriceUsd).toFixed(1)),
-      h1: parseFloat((volumes.h1 * avaxPriceUsd).toFixed(1)),
-      m5: parseFloat((volumes.m5 * avaxPriceUsd).toFixed(1))
+    const timeframes = {
+      m5: 5 * 60 * 1000,        // 5 min in ms
+      h1: 60 * 60 * 1000,       // 1 hr in ms
+      h6: 6 * 60 * 60 * 1000,   // 6 hr in ms
+      h24: 24 * 60 * 60 * 1000, // 24 hr in ms
     };
 
-    // Prepare websites and socials arrays
-    const websites = tokenMetadata?.website_url ? [
-      {
-        label: "Website",
-        url: tokenMetadata.website_url
-      }
-    ] : [];
+    const txns = {
+      m5: { buys: 0, sells: 0 },
+      h1: { buys: 0, sells: 0 },
+      h6: { buys: 0, sells: 0 },
+      h24: { buys: 0, sells: 0 },
+    };
 
-    const socials = tokenMetadata?.owner_twitter_handle ? [
-      {
-        type: "twitter",
-        url: `https://x.com/${tokenMetadata.owner_twitter_handle}` || tokenMetadata.twitter_url
-      }
-    ] : [];
+    token_data.forEach(txn => {
+      const txnTime = new Date(txn.timestamp);
+      const diff = now - txnTime; // difference in ms
 
-    // Build the final response object
+      for (const [key, window] of Object.entries(timeframes)) {
+        if (diff <= window) {
+          if (
+            txn.action.toLowerCase() === 'buy' ||
+            txn.action.toLowerCase() === 'initial buy'
+          ) {
+            txns[key].buys += 1;
+          } else if (txn.action.toLowerCase() === 'sell') {
+            txns[key].sells += 1;
+          }
+        }
+      }
+    });
+
+    const baseToken = {
+      address: token.contract_address,
+      name: token.name,
+      symbol: token.symbol,
+    };
+
+
+    const participants = calculateParticipantsByTimeframe(token_data, timeframes, now);
+
+    const quoteToken = {
+      address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+      name: "Wrapped AVAX",
+      symbol: "WAVAX",
+    };
+
     const result = {
       token : token_type,
       chainId: "avalanche",
       dexId: "arenatrade",
       url: `https://dexscreener.com/avalanche/${token.pair_address}`,
       pairAddress: token.pair_address,
-      baseToken: {
-        address: token.contract_address,
-        name: token.name,
-        symbol: token.symbol,
+      baseToken,
+      quoteToken,
+      priceNative: "0",
+      priceUsd: "0",
+      txns, // ✅ here’s your live counts
+      participants,
+      volume: {
+        m5: 0,
+        h1: 0,
+        h6: 0,
+        h24: 0,
       },
-      quoteToken: {
-        address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
-        name: "Wrapped AVAX",
-        symbol: "WAVAX",
+      priceChange: {
+        h1: 0,
+        h6: 0,
+        h24: 0,
       },
-      priceNative: priceNative.toString(), // Use dynamically calculated price
-      priceUsd: priceUsd.toString(),      // Use dynamically calculated price
-      txns: txns,
-      volume: volume,
-      priceChange: priceChange,
       liquidity: {
         usd: 0,
         base: 0,
-        quote: 0
+        quote: 0,
       },
-      fdv: fdv,               // Use calculated FDV
-      marketCap: marketCap,    // Use calculated Market Cap
-      pairCreatedAt: new Date().getTime(),
+      fdv: 0,
+      marketCap: 0,
+      pairCreatedAt: token.system_created,
+      buyers: 0,   
+      sellers: 0, 
+      makers: 0,   
       info: {
-        imageUrl: tokenMetadata?.photo_url || "", 
-        header: tokenMetadata?.owner_banner_url || "",
+        imageUrl: "",
+        header: "",
         openGraph: "",
-        websites: websites,
-        socials: socials
-      }
+        websites: [],
+        socials: [],
+      },
     };
 
-    return res.status(200).send({
-      isSuccess: true,
-      result,
-      message: null,
-      statusCode: 200
-    });
+    return res
+      .status(200)
+      .send({ isSuccess: true, result, message: null, statusCode: 200 });
 
   } catch (err) {
-    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+    console.error(err);
+    return res
+      .status(500)
+      .send(Response.sendResponse(false, null, "Error occurred", 500));
   }
 };
 
-function calculateTransactionCounts(trades) {
-  // Calculate current time and time thresholds
-  const now = new Date();
-  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-  const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
-  // Initialize counters
-  let txns = {
-    m5: { buys: 0, sells: 0 },
-    h1: { buys: 0, sells: 0 },
-    h6: { buys: 0, sells: 0 },
-    h24: { buys: 0, sells: 0 }
+function calculateParticipantsByTimeframe(token_data, timeframes, now) {
+  const buyersByTimeframe = {
+    m5: new Set(),
+    h1: new Set(),
+    h6: new Set(),
+    h24: new Set(),
   };
 
-  // Calculate transaction counts for each time period
-  trades.forEach(trade => {
-    const tradeTime = new Date(trade.timestamp);
-    
-    if (tradeTime >= twentyFourHoursAgo) {
-      if (trade.action === 'buy' || trade.action === 'initial buy') {
-        txns.h24.buys++;
-      } else if (trade.action === 'sell') {
-        txns.h24.sells++;
-      }
-      
-      if (tradeTime >= sixHoursAgo) {
-        if (trade.action === 'buy' || trade.action === 'initial buy') {
-          txns.h6.buys++;
-        } else if (trade.action === 'sell') {
-          txns.h6.sells++;
-        }
-        
-        if (tradeTime >= oneHourAgo) {
-          if (trade.action === 'buy' || trade.action === 'initial buy') {
-            txns.h1.buys++;
-          } else if (trade.action === 'sell') {
-            txns.h1.sells++;
-          }
-          
-          if (tradeTime >= fiveMinutesAgo) {
-            if (trade.action === 'buy' || trade.action === 'initial buy') {
-              txns.m5.buys++;
-            } else if (trade.action === 'sell') {
-              txns.m5.sells++;
-            }
-          }
+  const sellersByTimeframe = {
+    m5: new Set(),
+    h1: new Set(),
+    h6: new Set(),
+    h24: new Set(),
+  };
+
+  token_data.forEach(txn => {
+    const txnTime = new Date(txn.timestamp);
+    const diff = now - txnTime;
+    const addr = txn.from_address.toLowerCase();
+    const action = txn.action.toLowerCase();
+
+    for (const [key, window] of Object.entries(timeframes)) {
+      if (diff <= window) {
+        if (action === 'buy' || action === 'initial buy') {
+          buyersByTimeframe[key].add(addr);
+        } else if (action === 'sell') {
+          sellersByTimeframe[key].add(addr);
         }
       }
     }
   });
 
-  return txns;
-}
+  return {
+    m5: {
+      buyers: buyersByTimeframe.m5.size,
+      sellers: sellersByTimeframe.m5.size,
+      makers: buyersByTimeframe.m5.size + sellersByTimeframe.m5.size
 
-function calculateTradingVolumes(trades) {
-  // Calculate current time and time thresholds
-  const now = new Date();
-  const fiveMinutesAgo = new Date(now.getTime() - 5 * 60 * 1000);
-  const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-  const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-  // Initialize volume counters (in AVAX)
-  let volumes = {
-    m5: 0,
-    h1: 0,
-    h6: 0,
-    h24: 0
+    },
+    h1: {
+      buyers: buyersByTimeframe.h1.size,
+      sellers: sellersByTimeframe.h1.size,
+      makers: buyersByTimeframe.h1.size + sellersByTimeframe.h1.size
+    },
+    h6: {
+      buyers: buyersByTimeframe.h6.size,
+      sellers: sellersByTimeframe.h6.size,
+      makers: buyersByTimeframe.h6.size + sellersByTimeframe.h6.size,
+    },
+    h24: {
+      buyers: buyersByTimeframe.h24.size,
+      sellers: sellersByTimeframe.h24.size,
+      makers: buyersByTimeframe.h24.size + sellersByTimeframe.h24.size,
+    },
   };
-
-  // Calculate volumes for each time period
-  trades.forEach(trade => {
-    const tradeTime = new Date(trade.timestamp);
-    const avaxAmount = parseFloat(trade.transferred_avax) || 0;
-    
-    if (tradeTime >= twentyFourHoursAgo) {
-      volumes.h24 += avaxAmount;
-      
-      if (tradeTime >= sixHoursAgo) {
-        volumes.h6 += avaxAmount;
-        
-        if (tradeTime >= oneHourAgo) {
-          volumes.h1 += avaxAmount;
-          
-          if (tradeTime >= fiveMinutesAgo) {
-            volumes.m5 += avaxAmount;
-          }
-        }
-      }
-    }
-  });
-
-  return volumes;
 }
 
-function calculatePriceChanges(trades, avaxPriceUsd) {
-  if (!trades || trades.length < 2) {
-    return { m5: 0, h1: 0, h6: 0, h24: 0 };
-  }
 
-  // Process trades with proper price calculation
-  const validTrades = trades.map(t => {
-    try {
-      // Calculate price in AVAX (amount is in token units)
-      const priceAvax = parseFloat(t.amount) > 0 ? 
-        parseFloat(t.transferred_avax || 0) / parseFloat(t.amount) : 
-        0;
-      
-      // Convert to USD
-      const priceUsd = priceAvax * avaxPriceUsd;
 
-      return {
-        ...t,
-        timestamp: new Date(t.timestamp),
-        price: priceUsd
-      };
-    } catch (e) {
-      return null;
-    }
-  }).filter(t => t && !isNaN(t.price) && t.price > 0)
-    .sort((a, b) => a.timestamp - b.timestamp);
+// const pairTokenDataNew = async (req, res) => {
+//   try {
+//     const { pairId } = req.params;
+//     if (!pairId) {
+//       return res.status(400).send(Response.sendResponse(false, null, "Pair address is required", 400));
+//     }
 
-  if (validTrades.length < 2) {
-    return { m5: 0, h1: 0, h6: 0, h24: 0 };
-  }
+//     const pairData = await db.sequelize.query(
+//       `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.creator_address, atc.internal_id, atc.supply
+//        FROM "arena-trade-coins" AS atc
+//        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
+//       {
+//         replacements: { pair_address: pairId },
+//         type: db.Sequelize.QueryTypes.SELECT,
+//       }
+//     );
 
-  const now = new Date();
-  const currentPrice = validTrades[validTrades.length - 1].price;
+//     if (!pairData || pairData.length === 0) {
+//       return res.status(404).send(Response.sendResponse(false, null, "Pair not found", 400));
+//     }
 
-  // Time thresholds
-  const periods = {
-    m5: new Date(now - 5 * 60 * 1000),    // 5 minutes ago
-    h1: new Date(now - 60 * 60 * 1000),    // 1 hour ago
-    h6: new Date(now - 6 * 60 * 60 * 1000), // 6 hours ago
-    h24: new Date(now - 24 * 60 * 60 * 1000) // 24 hours ago
-  };
+//     const token = pairData[0];
+//     let token_id = token.internal_id;
 
-  // Calculate price changes
-  const priceChange = {};
-  for (const [period, cutoff] of Object.entries(periods)) {
-    // Find the first trade after the cutoff
-    const periodTrades = validTrades.filter(t => t.timestamp >= cutoff);
+//     // Fetch trades for the token
+//     let trades = await db.sequelize.query(
+//       `SELECT * FROM "arena_trades" WHERE token_id = :token_id`, 
+//       { 
+//         replacements: { token_id: token_id },
+//         type: db.Sequelize.QueryTypes.SELECT
+//       }
+//     );
+//     let token_type = "prebonded"
+//     // Fetch token metadata
+//     let tokenMetadata = await db.TokenMetadata.findOne({  
+//       where: { bc_group_id: token.internal_id },
+//       attributes: ['photo_url', 'owner_twitter_handle', 'owner_twitter_picture', 'owner_banner_url'],
+//     });
+ 
+//     // Get current AVAX price in USD
+//     const latestPriceRes = await db.sequelize.query(
+//       `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
+//       { type: db.Sequelize.QueryTypes.SELECT }
+//     );
+
+//     if (!latestPriceRes.length) {
+//       throw new Error("AVAX price not found in avax_price_live table");
+//     }
+//     const avaxPriceUsd = parseFloat(latestPriceRes[0].price);
+
+//     // ===== NEW: Get latest token price in AVAX and convert to USD =====
+//     const latestTrade = await db.sequelize.query(
+//       `SELECT transferred_avax, amount, avax_price 
+//        FROM "arena_trades" 
+//        WHERE token_id = :token_id 
+//        ORDER BY timestamp DESC LIMIT 1`,
+//       { 
+//         replacements: { token_id: token.internal_id },
+//         type: db.Sequelize.QueryTypes.SELECT 
+//       }
+//     );
+
+//     let priceNative = "0";
+//     let priceUsd = "0";
     
-    if (periodTrades.length === 0) {
-      // If no trades in period, look for the closest older trade
-      const olderTrades = validTrades.filter(t => t.timestamp < cutoff);
-      if (olderTrades.length > 0) {
-        priceChange[period] = ((currentPrice - olderTrades[olderTrades.length - 1].price) / 
-                             olderTrades[olderTrades.length - 1].price) * 100;
-      } else {
-        priceChange[period] = 0;
-      }
-    } else {
-      const startPrice = periodTrades[0].price;
-      priceChange[period] = ((currentPrice - startPrice) / startPrice) * 100;
-    }
+//   if (latestTrade.length > 0) {
+//     const transferredAvax = parseFloat(latestTrade[0].transferred_avax);
+//     const tokenAmount = parseFloat(latestTrade[0].amount) / 1e18; 
+//     priceNative = (transferredAvax / tokenAmount).toFixed(11); 
+    
+//     // Calculate priceUsd
+//     const currentAvaxPrice = latestTrade[0].avax_price || avaxPriceUsd;
+//     priceUsd = (parseFloat(priceNative) * currentAvaxPrice).toFixed(11);
+//   }
 
-    // Round to 2 decimal places
-    priceChange[period] = parseFloat(priceChange[period].toFixed(2));
-  }
+//     // ===== NEW: Calculate FDV and Market Cap =====
+//     const totalSupply = token.supply || 0; // Using the supply field from your query
+//     const fdv = priceUsd * totalSupply;
+//     const marketCap = fdv; // Assuming circulating supply = total supply unless you have separate data
 
-  return priceChange;
-}
+//     // Calculate transaction counts, volumes, and price changes
+//     const txns = calculateTransactionCounts(trades);
+//     const volumes = calculateTradingVolumes(trades);
+//     const priceChange = calculatePriceChanges(trades, avaxPriceUsd);
+//     const buySellStatsAll = calculateBuySellVolAndCountsAllPeriods(trades, avaxPriceUsd);
+
+//     // Calculate volumes in USD
+//     const volume = {
+//       h24: parseFloat((volumes.h24 * avaxPriceUsd).toFixed(1)),
+//       h6: parseFloat((volumes.h6 * avaxPriceUsd).toFixed(1)),
+//       h1: parseFloat((volumes.h1 * avaxPriceUsd).toFixed(1)),
+//       m5: parseFloat((volumes.m5 * avaxPriceUsd).toFixed(1))
+//     };
+
+//     // Prepare websites and socials arrays
+//     const websites = tokenMetadata?.website_url ? [
+//       {
+//         label: "Website",
+//         url: tokenMetadata.website_url
+//       }
+//     ] : [];
+
+//     const socials = tokenMetadata?.owner_twitter_handle ? [
+//       {
+//         type: "twitter",
+//         url: `https://x.com/${tokenMetadata.owner_twitter_handle}` || tokenMetadata.twitter_url
+//       }
+//     ] : [];
+
+//     // Build the final response object
+//     const result = {
+//       token : token_type,
+//       chainId: "avalanche",
+//       dexId: "arenatrade",
+//       url: `https://dexscreener.com/avalanche/${token.pair_address}`,
+//       pairAddress: token.pair_address,
+//       baseToken: {
+//         address: token.contract_address,
+//         name: token.name,
+//         symbol: token.symbol,
+//       },
+//       quoteToken: {
+//         address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+//         name: "Wrapped AVAX",
+//         symbol: "WAVAX",
+//       },
+//       priceNative: priceNative.toString(), // Use dynamically calculated price
+//       priceUsd: priceUsd.toString(),      // Use dynamically calculated price
+//       txns: txns,
+//       volume: volume,
+//       priceChange: priceChange,
+//       liquidity: {
+//         usd: 0,
+//         base: 0,
+//         quote: 0
+//       },
+//       fdv: fdv,               // Use calculated FDV
+//       marketCap: marketCap,    // Use calculated Market Cap
+//       pairCreatedAt: new Date().getTime(),
+//       info: {
+//         imageUrl: tokenMetadata?.photo_url || "", 
+//         header: tokenMetadata?.owner_banner_url || "",
+//         openGraph: "",
+//         websites: websites,
+//         socials: socials
+//       }
+//     };
+//     result.buySellStats = buySellStatsAll;
+
+//     return res.status(200).send({
+//       isSuccess: true,
+//       result,
+//       message: null,
+//       statusCode: 200
+//     });
+
+//   } catch (err) {
+//     return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+//   }
+//};
+
+
 
 
 const tokenListTokens = async (req, res) => {
@@ -660,6 +703,7 @@ const myHoldingTokens = async (req, res) => {
     ));
 
   } catch (err) {
+    console.log("eee",err)
     return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
   }
 };
@@ -945,6 +989,29 @@ const getInternalIdByPairAddressData = async (req,res) => {
   }
 };
 
+const getAllTokenBalance  = async (req,res) => {
+  try{
+    const { wallet_address, contract_address } = req.query;
+
+    if (!wallet_address || !contract_address) {
+      return res.status(400).send(Response.sendResponse(false, null, "Missing parameters", 400));
+    }
+
+    const contract = new ethers.Contract(contract_address, ERC20_ABI, provider);
+    const [balance, decimals] = await Promise.all([
+      contract.balanceOf(wallet_address),
+      contract.decimals()
+    ]);
+   
+    const formatted = ethers.formatUnits(balance, decimals);
+    const response = parseFloat(formatted).toFixed(2);
+
+    return res.status(200).send(Response.sendResponse(true,response,null,200));
+  }catch(err){
+    return res.status(500).send(Response.sendResponse(false,null,"Error fetching internal ID by pair address:",500));
+  }
+}
+
 
 module.exports = {
     recentTokens,
@@ -958,5 +1025,6 @@ module.exports = {
     tokenOhlcData,
     communitiesTopController,
     holdersTokens,
-    getInternalIdByPairAddressData
+    getInternalIdByPairAddressData,
+    getAllTokenBalance
 }
