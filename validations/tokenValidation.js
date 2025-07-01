@@ -42,7 +42,6 @@ const tokenSchema = {
 
     preBondedTokensSchema : Joi.object().keys({
         wallet_address: Joi.string().required(),
-        contract_address : Joi.string().required(),
     }),
       
 }; 
