@@ -404,269 +404,123 @@ function calculateParticipantsByTimeframe(token_data, timeframes, now) {
   };
 }
 
-
-
-// const pairTokenDataNew = async (req, res) => {
-//   try {
-//     const { pairId } = req.params;
-//     if (!pairId) {
-//       return res.status(400).send(Response.sendResponse(false, null, "Pair address is required", 400));
-//     }
-
-//     const pairData = await db.sequelize.query(
-//       `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.creator_address, atc.internal_id, atc.supply
-//        FROM "arena-trade-coins" AS atc
-//        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
-//       {
-//         replacements: { pair_address: pairId },
-//         type: db.Sequelize.QueryTypes.SELECT,
-//       }
-//     );
-
-//     if (!pairData || pairData.length === 0) {
-//       return res.status(404).send(Response.sendResponse(false, null, "Pair not found", 400));
-//     }
-
-//     const token = pairData[0];
-//     let token_id = token.internal_id;
-
-//     // Fetch trades for the token
-//     let trades = await db.sequelize.query(
-//       `SELECT * FROM "arena_trades" WHERE token_id = :token_id`, 
-//       { 
-//         replacements: { token_id: token_id },
-//         type: db.Sequelize.QueryTypes.SELECT
-//       }
-//     );
-//     let token_type = "prebonded"
-//     // Fetch token metadata
-//     let tokenMetadata = await db.TokenMetadata.findOne({  
-//       where: { bc_group_id: token.internal_id },
-//       attributes: ['photo_url', 'owner_twitter_handle', 'owner_twitter_picture', 'owner_banner_url'],
-//     });
- 
-//     // Get current AVAX price in USD
-//     const latestPriceRes = await db.sequelize.query(
-//       `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
-//       { type: db.Sequelize.QueryTypes.SELECT }
-//     );
-
-//     if (!latestPriceRes.length) {
-//       throw new Error("AVAX price not found in avax_price_live table");
-//     }
-//     const avaxPriceUsd = parseFloat(latestPriceRes[0].price);
-
-//     // ===== NEW: Get latest token price in AVAX and convert to USD =====
-//     const latestTrade = await db.sequelize.query(
-//       `SELECT transferred_avax, amount, avax_price 
-//        FROM "arena_trades" 
-//        WHERE token_id = :token_id 
-//        ORDER BY timestamp DESC LIMIT 1`,
-//       { 
-//         replacements: { token_id: token.internal_id },
-//         type: db.Sequelize.QueryTypes.SELECT 
-//       }
-//     );
-
-//     let priceNative = "0";
-//     let priceUsd = "0";
-    
-//   if (latestTrade.length > 0) {
-//     const transferredAvax = parseFloat(latestTrade[0].transferred_avax);
-//     const tokenAmount = parseFloat(latestTrade[0].amount) / 1e18; 
-//     priceNative = (transferredAvax / tokenAmount).toFixed(11); 
-    
-//     // Calculate priceUsd
-//     const currentAvaxPrice = latestTrade[0].avax_price || avaxPriceUsd;
-//     priceUsd = (parseFloat(priceNative) * currentAvaxPrice).toFixed(11);
-//   }
-
-//     // ===== NEW: Calculate FDV and Market Cap =====
-//     const totalSupply = token.supply || 0; // Using the supply field from your query
-//     const fdv = priceUsd * totalSupply;
-//     const marketCap = fdv; // Assuming circulating supply = total supply unless you have separate data
-
-//     // Calculate transaction counts, volumes, and price changes
-//     const txns = calculateTransactionCounts(trades);
-//     const volumes = calculateTradingVolumes(trades);
-//     const priceChange = calculatePriceChanges(trades, avaxPriceUsd);
-//     const buySellStatsAll = calculateBuySellVolAndCountsAllPeriods(trades, avaxPriceUsd);
-
-//     // Calculate volumes in USD
-//     const volume = {
-//       h24: parseFloat((volumes.h24 * avaxPriceUsd).toFixed(1)),
-//       h6: parseFloat((volumes.h6 * avaxPriceUsd).toFixed(1)),
-//       h1: parseFloat((volumes.h1 * avaxPriceUsd).toFixed(1)),
-//       m5: parseFloat((volumes.m5 * avaxPriceUsd).toFixed(1))
-//     };
-
-//     // Prepare websites and socials arrays
-//     const websites = tokenMetadata?.website_url ? [
-//       {
-//         label: "Website",
-//         url: tokenMetadata.website_url
-//       }
-//     ] : [];
-
-//     const socials = tokenMetadata?.owner_twitter_handle ? [
-//       {
-//         type: "twitter",
-//         url: `https://x.com/${tokenMetadata.owner_twitter_handle}` || tokenMetadata.twitter_url
-//       }
-//     ] : [];
-
-//     // Build the final response object
-//     const result = {
-//       token : token_type,
-//       chainId: "avalanche",
-//       dexId: "arenatrade",
-//       url: `https://dexscreener.com/avalanche/${token.pair_address}`,
-//       pairAddress: token.pair_address,
-//       baseToken: {
-//         address: token.contract_address,
-//         name: token.name,
-//         symbol: token.symbol,
-//       },
-//       quoteToken: {
-//         address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
-//         name: "Wrapped AVAX",
-//         symbol: "WAVAX",
-//       },
-//       priceNative: priceNative.toString(), // Use dynamically calculated price
-//       priceUsd: priceUsd.toString(),      // Use dynamically calculated price
-//       txns: txns,
-//       volume: volume,
-//       priceChange: priceChange,
-//       liquidity: {
-//         usd: 0,
-//         base: 0,
-//         quote: 0
-//       },
-//       fdv: fdv,               // Use calculated FDV
-//       marketCap: marketCap,    // Use calculated Market Cap
-//       pairCreatedAt: new Date().getTime(),
-//       info: {
-//         imageUrl: tokenMetadata?.photo_url || "", 
-//         header: tokenMetadata?.owner_banner_url || "",
-//         openGraph: "",
-//         websites: websites,
-//         socials: socials
-//       }
-//     };
-//     result.buySellStats = buySellStatsAll;
-
-//     return res.status(200).send({
-//       isSuccess: true,
-//       result,
-//       message: null,
-//       statusCode: 200
-//     });
-
-//   } catch (err) {
-//     return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
-//   }
-//};
-
-
-
-
 const tokenListTokens = async (req, res) => {
-    try {
-      let { count, offset, search, sortBy, orderBy } = req.query;
-      count = Number(count) || 10;
-      offset = Number(offset) || 0;
-      let search_key = ``;
-      if (search) {
-        // Check if search input looks like a contract address (starts with 0x and 40 hex chars)
-        const isAddress = /^0x[a-fA-F0-9]{40}$/.test(search.trim());
-      
-        if (isAddress) {
-          search_key = `AND LOWER(atc.contract_address) = LOWER(:search) OR LOWER(atc.pair_address) = LOWER(:search)`;
-        } else {
-          search_key = `AND (atc.symbol ILIKE :search OR atc.name ILIKE :search)`;
-        }
+  try {
+    let { count, offset, search } = req.query;
+
+    let search_key = '';
+    let replacements = {
+      count: Number(count),
+      offset: Number(offset)
+    };
+
+    if (search) {
+      const trimmedSearch = search.trim();
+      const isAddress = /^0x[a-fA-F0-9]{40}$/.test(trimmedSearch);
+
+      if (isAddress) {
+        search_key = `AND (LOWER(atc.contract_address) = LOWER(:search) OR LOWER(atc.pair_address) = LOWER(:search))`;
+        replacements.search = trimmedSearch;
+      } else {
+        search_key = `AND (atc.symbol ILIKE :search OR atc.name ILIKE :search)`;
+        replacements.search = `%${trimmedSearch}%`;
       }
-  
-      // Whitelist allowed fields for sorting to prevent SQL injection
-      const allowedSortFields = ['contract_address', 'symbol', 'name', 'id', 'pair_address'];
-      const allowedOrderDirections = ['ASC', 'DESC'];
-  
-      // Fallbacks and sanitization
-      sortBy = allowedSortFields.includes(sortBy) ? sortBy : 'id';
-      orderBy = allowedOrderDirections.includes((orderBy || '').toUpperCase()) ? orderBy.toUpperCase() : 'DESC';
-  
-      const order_key = `ORDER BY atc.${sortBy} ${orderBy}`;
-  
-      // 1. Count of distinct contract_address
-      const countResult = await db.sequelize.query(
-        `SELECT COUNT(*) as total FROM (
-           SELECT DISTINCT ON (atc.contract_address) atc.contract_address 
-           FROM "arena-trade-coins" AS atc
-           LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
-           WHERE 1=1 ${search_key}
-           ORDER BY atc.contract_address, atc.id DESC
-         ) AS subquery`,
-        {
-          replacements: search ? { search: `%${search}%` } : {},
-          type: db.Sequelize.QueryTypes.SELECT,
-        }
-      );
-      
-      // 2. Fetch paginated data
-      const token_data = await db.sequelize.query(
-        `SELECT DISTINCT ON (atc.contract_address) 
-           atc.id,
-           atc.contract_address, 
-           atc.symbol,
-           atc.pair_address, 
-           atc.name, 
-           tm.photo_url AS photo_url
-         FROM "arena-trade-coins" AS atc
-         LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
-         WHERE 1=1 ${search_key}
-         ORDER BY atc.contract_address, atc.id DESC
-         LIMIT :count OFFSET :offset`,
-        {
-          replacements: {
-            ...(search ? { search: search.trim() } : {}),
-            count,
-            offset
-          },
-          type: db.Sequelize.QueryTypes.SELECT,
-        }
-      );
-  
-  
-      await Promise.all(token_data.map(async (token) => {
-        if (token.pair_address) {
-          const marketData = await DexScreenerService.fetchMarketData(token.pair_address);
-          Object.assign(token, marketData);
-        } else {
-          Object.assign(token, {
-            priceUsd: null,
-            volume: null,
-            priceChange: null,
-            liquidity: null,
-            fdv: null,
-            marketCap: null
-          });
-        }
-      }));
-  
-      token_data.sort((a, b) => {
-        if (b.marketCap === null && a.marketCap === null) return 0;
-        if (b.marketCap === null) return -1;
-        if (a.marketCap === null) return 1;
-        return b.marketCap - a.marketCap;
-      });
-  
-      return res.status(200).send(
-        Response.sendResponse(true, { token_data, length: countResult[0].total }, null, 200)
-      );
-  
-    } catch (err) {
-      return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
     }
+
+    // Step 1: Get total count
+    const token_count = await db.sequelize.query(
+      `SELECT COUNT(*) AS total FROM "arena-trade-coins" AS atc
+       LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
+       WHERE 1=1 ${search_key}`,
+      {
+        replacements,
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    // Step 2: Get token list
+    const token_details = await db.sequelize.query(
+      `SELECT atc.contract_address, atc.id, atc.lp_deployed ,atc.contract_address, atc.symbol, atc.pair_address, atc.name, atc.internal_id, atc.system_created, tm.photo_url AS photo_url
+       FROM "arena-trade-coins" AS atc
+       LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
+       WHERE 1=1 ${search_key}
+       ORDER BY atc.system_created DESC
+       LIMIT :count OFFSET :offset`,
+      {
+        replacements,
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    // Step 3: For each token, get extra data in parallel
+    const token_data = await Promise.all(
+      token_details.map(async (data) => {
+        const url = `https://api.dexscreener.com/latest/dex/pairs/avalanche/${data.pair_address}`;
+
+        try {
+          const response = await axios.get(url);
+          const pairInfo = response.data?.pair;
+          if (pairInfo) {
+            return {
+              ...data,
+              priceUsd: pairInfo?.priceUsd,
+              volume: pairInfo?.volume,
+              priceChange: pairInfo?.priceChange,
+              liquidity: pairInfo?.liquidity,
+              fdv: pairInfo?.fdv,
+              marketCap: pairInfo?.marketCap
+            };
+          }
+        } catch (err) {
+          console.error(`Dexscreener error for pair_address ${data.pair_address}:`, err.message);
+        }
+
+        // Dexscreener had no data or failed: fallback to DB
+        const transferredResult = await db.sequelize.query(
+          `SELECT COALESCE(SUM(CAST(transferred_avax AS NUMERIC)), 0) AS total_transferred_avax
+           FROM "arena_trades"
+           WHERE token_id = :token_id`,
+          {
+            replacements: { token_id: data.internal_id },
+            type: db.Sequelize.QueryTypes.SELECT,
+          }
+        );
+
+        const latestPriceResult = await db.sequelize.query(
+          `SELECT avax_price
+           FROM "arena_trades"
+           WHERE token_id = :token_id
+           ORDER BY timestamp DESC
+           LIMIT 1`,
+          {
+            replacements: { token_id: data.internal_id },
+            type: db.Sequelize.QueryTypes.SELECT,
+          }
+        );
+
+        const totalTransferredAvax = Number(transferredResult[0].total_transferred_avax);
+        const latestAvaxPrice = Number(latestPriceResult[0]?.avax_price || 0);
+        const latest_total_volume_usd = totalTransferredAvax * latestAvaxPrice;
+
+        return {
+          ...data,
+          priceUsd: null,
+          volume: latest_total_volume_usd || 0,
+          priceChange: null,
+          liquidity: null,
+          fdv: null,
+          marketCap: null
+        };
+      })
+    );
+
+    return res
+      .status(200)
+      .send(Response.sendResponse(true, { token_data, length: Number(token_count[0].total) }, null, 200));
+  } catch (err) {
+  
+    return res.status(500).send(Response.sendResponse(false, null, 'Error occurred', 500));
+  }
 };
 
 const myHoldingTokens = async (req, res) => {
@@ -701,18 +555,12 @@ const myHoldingTokens = async (req, res) => {
       contract.decimals()
     ]);
 
-    const formattedBalance = ethers.formatUnits(balance, decimals);
+    const formattedBalance = Number(ethers.formatUnits(balance, decimals)).toFixed(2);
     response[0].amount = formattedBalance;
-
     let usdPrice = 0;
     response[0].priceUsd = usdPrice;
 
-    return res.status(200).send(Response.sendResponse(
-      true, 
-      response,
-      "Data retrieved", 
-      200
-    ));
+    return res.status(200).send(Response.sendResponse(true, response, "Data retrieved", 200));
 
   } catch (err) {
     // console.log("eee",err)
@@ -728,7 +576,6 @@ const holdersTokens = async (req, res) => {
       return res.status(400).send(Response.sendResponse(false, null, "Missing pair address parameter", 400));
     }
 
-    // let pairAddress = pair_address.toLowerCase();
     const response = await db.sequelize.query(
       `SELECT at.from_address, atc.pair_address, atc.contract_address, atc.internal_id ,atc.supply
         FROM "arena-trade-coins" AS atc
@@ -1001,29 +848,6 @@ const getInternalIdByPairAddressData = async (req,res) => {
   }
 };
 
-const getAllTokenBalance  = async (req,res) => {
-  try{
-    const { wallet_address, contract_address } = req.query;
-
-    if (!wallet_address || !contract_address) {
-      return res.status(400).send(Response.sendResponse(false, null, "Missing parameters", 400));
-    }
-
-    const contract = new ethers.Contract(contract_address, ERC20_ABI, provider);
-    const [balance, decimals] = await Promise.all([
-      contract.balanceOf(wallet_address),
-      contract.decimals()
-    ]);
-   
-    const formatted = ethers.formatUnits(balance, decimals);
-    const response = parseFloat(formatted).toFixed(2);
-
-    return res.status(200).send(Response.sendResponse(true,response,null,200));
-  }catch(err){
-    return res.status(500).send(Response.sendResponse(false,null,"Error fetching internal ID by pair address:",500));
-  }
-}
-
 
 module.exports = {
     recentTokens,
@@ -1037,6 +861,5 @@ module.exports = {
     tokenOhlcData,
     communitiesTopController,
     holdersTokens,
-    getInternalIdByPairAddressData,
-    getAllTokenBalance
+    getInternalIdByPairAddressData
 }
