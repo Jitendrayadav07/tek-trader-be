@@ -43,4 +43,12 @@ router.get("/transaction-history/:pair_address",
     JoiMiddleWare(tokenSchema.transactionContractAddressSchema, "query"),
     tokenController.transactionBuySellHistory);
 
+router.get("/all-token-balance",
+    JoiMiddleWare(tokenSchema.preBondedTokensSchema, "query"),
+    tokenController.getAllTokenBalance);
+
+router.get("/wallet-holdings",
+    JoiMiddleWare(tokenSchema.walletHoldingsSchema, "query"),
+    tokenController.walletHoldings);
+
 module.exports = router;

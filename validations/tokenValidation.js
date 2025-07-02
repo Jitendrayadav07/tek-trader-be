@@ -1,13 +1,13 @@
-const Joi = require('joi'); 
+const Joi = require('joi');
 
-const tokenSchema = { 
+const tokenSchema = {
     recentTokens: Joi.object().keys({
         limit: Joi.number().integer().min(1).max(100).default(10).required(),
         offset: Joi.number().integer().min(0).default(0).required(),
         search: Joi.string().optional().allow(''),
     }),
 
-    myHoldingTokensSchema : Joi.object().keys({
+    myHoldingTokensSchema: Joi.object().keys({
         wallet_address: Joi.string().required(),
         pair_address: Joi.string().required(),
     }),
@@ -20,13 +20,13 @@ const tokenSchema = {
         orderBy: Joi.any().valid("asc", "desc"),
     }),
 
-    getAddressData : Joi.object().keys({
+    getAddressData: Joi.object().keys({
         limit: Joi.number().default(10),
         offset: Joi.number().default(0),
         order: Joi.any(),
     }),
 
-    transactionContractAddressSchema : Joi.object().keys({
+    transactionContractAddressSchema: Joi.object().keys({
         limit: Joi.number().required(),
         offset: Joi.number().required(),
     }),
@@ -35,14 +35,18 @@ const tokenSchema = {
         contract_address: Joi.string().required(),
     }),
 
-    holdersTokensSchema : Joi.object().keys({
+    holdersTokensSchema: Joi.object().keys({
         limit: Joi.number().required(),
         offset: Joi.number().required(),
     }),
 
-    preBondedTokensSchema : Joi.object().keys({
+    preBondedTokensSchema: Joi.object().keys({
+        wallet_address: Joi.string().required(),
+        contract_address: Joi.string().required(),
+    }),
+    walletHoldingsSchema: Joi.object().keys({
         wallet_address: Joi.string().required(),
     }),
-      
-}; 
+
+};
 module.exports = tokenSchema
