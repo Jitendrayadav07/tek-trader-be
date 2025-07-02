@@ -27,10 +27,6 @@ router.get("/tokens-holders/:pair_address",
     JoiMiddleWare(tokenSchema.holdersTokensSchema, "query"),
     tokenController.holdersTokens);
 
-router.get("/arena-stars",
-    JoiMiddleWare(tokenSchema.arenaStartSchema, "query"),
-    tokenController.arenaStartController);
-
 router.get("/communities/top",
     tokenController.communitiesTopController);
 

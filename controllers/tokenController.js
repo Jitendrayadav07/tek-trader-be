@@ -133,6 +133,7 @@ const recentTokens = async (req, res) => {
 
         return {
           row_id: token.id,
+          tokens: tokens.ip_deployed,
           creator_address: token.creator_address?.toLowerCase(),
           contract_address: process.env.CONTRACT_ADDRESS,
           token_id: token.internal_id.toString(),
@@ -212,7 +213,7 @@ const pairTokenDataNew = async (req, res) => {
 
     // Query your DB
     const pairData = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.creator_address, atc.internal_id, atc.supply ,atc.system_created
+      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address,  atc.lp_deployed, atc.creator_address, atc.internal_id, atc.supply ,atc.system_created
        FROM "arena-trade-coins" AS atc 
        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
       {
@@ -230,7 +231,7 @@ const pairTokenDataNew = async (req, res) => {
     const token = pairData[0];
 
     const token_data = await db.sequelize.query(
-      `SELECT atc.pair_address, atc.contract_address, atc.supply, at.token_id, atc.internal_id, 
+      `SELECT atc.pair_address, atc.contract_address, atc.supply, at.token_id, atc.internal_id, atc.lp_deployed,
               at.action, at.from_address, at.amount, atc.name, at.timestamp, at.status
        FROM "arena_trades" AS at 
        LEFT JOIN "arena-trade-coins" AS atc ON at.token_id = atc.internal_id 
@@ -293,6 +294,7 @@ const pairTokenDataNew = async (req, res) => {
 
     const result = {
       token : token_type,
+      lp_deployed : token.lp_deployed,
       chainId: "avalanche",
       dexId: "arenatrade",
       url: `https://dexscreener.com/avalanche/${token.pair_address}`,
@@ -440,7 +442,7 @@ const tokenListTokens = async (req, res) => {
 
     // Step 2: Get token list
     const token_details = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.id, atc.lp_deployed ,atc.contract_address, atc.symbol, atc.pair_address, atc.name, atc.internal_id, atc.system_created, tm.photo_url AS photo_url
+      `SELECT atc.contract_address, atc.id, atc.lp_deployed ,atc.contract_address, atc.symbol, atc.lp_deployed, atc.pair_address, atc.name, atc.internal_id, atc.system_created, tm.photo_url AS photo_url
        FROM "arena-trade-coins" AS atc
        LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
        WHERE 1=1 ${search_key}
@@ -475,7 +477,6 @@ const tokenListTokens = async (req, res) => {
           console.error(`Dexscreener error for pair_address ${data.pair_address}:`, err.message);
         }
 
-        // Dexscreener had no data or failed: fallback to DB
         const transferredResult = await db.sequelize.query(
           `SELECT COALESCE(SUM(CAST(transferred_avax AS NUMERIC)), 0) AS total_transferred_avax
            FROM "arena_trades"
@@ -533,7 +534,7 @@ const myHoldingTokens = async (req, res) => {
 
     // Query to get token holdings data
     const response = await db.sequelize.query(
-      `SELECT atc.pair_address,atc.contract_address,atc.name,tm.photo_url AS photo_url
+      `SELECT atc.pair_address,atc.contract_address,atc.lp_deployed,atc.name,tm.photo_url AS photo_url
        FROM "arena-trade-coins" AS atc
        LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
        WHERE LOWER(atc.pair_address) = LOWER(:pair_address) LIMIT 1;`,
@@ -577,11 +578,11 @@ const holdersTokens = async (req, res) => {
     }
 
     const response = await db.sequelize.query(
-      `SELECT at.from_address, atc.pair_address, atc.contract_address, atc.internal_id ,atc.supply
+      `SELECT at.from_address, atc.pair_address, atc.contract_address, atc.lp_deployed, atc.internal_id ,atc.supply
         FROM "arena-trade-coins" AS atc
         LEFT JOIN "arena_trades" AS at ON at.token_id = atc.internal_id
         WHERE LOWER(pair_address) = LOWER(:pair_address)
-        GROUP BY at.from_address, atc.pair_address, atc.contract_address, atc.internal_id,atc.supply
+        GROUP BY at.from_address, atc.pair_address, atc.contract_address, atc.internal_id,atc.supply,atc.lp_deployed
         LIMIT :limit OFFSET :offset`,
       {
         replacements: { pair_address: pair_address  , limit: Number(limit) || 10, offset: Number(offset) || 0 },
@@ -615,7 +616,7 @@ const transactionBuySellHistory = async (req, res) => {
     const offset = Number(req.query.offset) || 0;
 
     const walletDataList = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.creator_address
+      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.lp_deployed , atc.creator_address
        FROM "arena-trade-coins" AS atc
        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
       {
@@ -628,11 +629,16 @@ const transactionBuySellHistory = async (req, res) => {
 
     if (!pair_address) {
       return res.status(400).send(
-        Response.sendResponse(false, null, "Contract address is required", 400)
+        Response.sendResponse(false, null, "Pair address is required", 400)
       );
     }
 
     let contract_address = walletDataList[0]?.contract_address;
+    if(!contract_address){
+      return res.status(400).send(
+        Response.sendResponse(false, null, "Contract address is required", 400)
+      );
+    }
 
     const tradeData = await db.sequelize.query(
       `
@@ -644,7 +650,8 @@ const transactionBuySellHistory = async (req, res) => {
         at.token_id,
         at.action,
         at.timestamp,
-        at.transferred_avax
+        at.transferred_avax,
+        atc.lp_deployed
       FROM "arena-trade-coins" AS atc 
       LEFT JOIN "arena_trades" AS at ON atc.internal_id = at.token_id
       WHERE LOWER(atc.contract_address) = LOWER(:contract_address)
@@ -669,7 +676,8 @@ const transactionBuySellHistory = async (req, res) => {
       return {
         ...item,
         amount: formattedAmount,
-        transferred_avax: formattedAvax
+        transferred_avax: formattedAvax,
+        lp_deployed: item.lp_deployed
       };
     });
 
@@ -687,52 +695,6 @@ const transactionBuySellHistory = async (req, res) => {
   }
 };
 
-const arenaStartController = async (req, res) => {
-  try {
-    const { contract_address } = req.query;
-
-    if (!contract_address) {
-      return res.status(400).send(
-        Response.sendResponse(false, null, "Missing Token", 400)
-      );
-    }
-
-    let token = 'eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjp7ImlkIjoiZmFiN2Q5ZjEtNWRlZC00N2YyLWI2NTEtM2Q3YmY4ZGNhZjgxIiwidHdpdHRlcklkIjoiNzk2MjQ0Nzg2OTQwNDE2MDAxIiwidHdpdHRlckhhbmRsZSI6ImFzaHVfY2hpa2FuZSIsInR3aXR0ZXJOYW1lIjoiQXNoaXNoIENoaWthbmXwn5S6IiwidHdpdHRlclBpY3R1cmUiOiJodHRwczovL3N0YXRpYy5zdGFyc2FyZW5hLmNvbS91cGxvYWRzLzkwZTc5ZWE3LTNhMDMtZjMxMi0yY2Y5LWNhYmI4OGMzY2Y1NDE3Mjk0ODQ0OTU4MzcucG5nIiwiYWRkcmVzcyI6IjB4ZDUyNjczZjQ2MjBkNzhiOGVhZmI5NTg1OTM1NzIzNjFiY2I2MzAzOCJ9LCJpYXQiOjE3NDk0NDMwNDMsImV4cCI6MTc1ODA4MzA0M30.SzALMP6gjisWvBAeoRcYLsP1wIKmzsyiN3hPxN0b7AfSGaj3GhIk2ZxV2Z0U14mQGfZ_vwHNbuiUp51ATZ0kb0X9TltGI0Ih1pwv-Bdid5-pzXZWO5Xvw0mFa3tOaFklukYF2mqD8blacxlng9n6IlNYhAVIEYxrTu33Bx9onulYwez88PFxAj7X3dBlLNyEMEu-vyahEVjaFHH4Fe4oaMHEXawRsLXz1j-nH64lY79RBwxC-1TwiYslfedrJ8zZ02WAFRdI8CgGzoOj9kD6mgznLXjDcKh5u5tRwsC3u6YpsvxwhWGZA7sGngsrYEpYYVFJAuBlFfA88BOwfRUdsGFCyCwHA8WZP_B-xZBqTpm_gKwtPo--cE9VxZjZxzSS1-8NKru6APCiJPQchZdJSTsDQVgdC_qtqrEufI_orU0sUuIQ0NzPe6yDk9nT8B6OvVL84OTau1XouRCvP4FR8gCtjm6dCWSmPfWytljXl867wrQkePTvtz-1SU5fjMcrm5hfbLiXl2NCa3SQhbQMZCeKCifBqfD9qvkVteT0LM728_0QK4E0iDWuOf7D5Pf2B7_RRn5PJn7WFJVJydOkyBB1tvUYHc_rR5RUoNoQtT84vwoX_w47FmdW3YtVJRf3fqJ3S_B5aVtBYr36DjupF7gRUs0aGqa8wGzO8fptBT0'
-
-    const [avaxRes, tokenRes] = await Promise.all([
-      axios.get('https://api.starsarena.com/currency/avax', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }),
-      axios.get(
-        `https://api.starsarena.com/communities/get-community-profile-candidate?param=${contract_address}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      ),
-    ]);
-
-    return res.status(200).send({
-      isSuccess: true,
-      statusCode: 200,
-      message: 'Data fetched successfully',
-      result: {
-        avaxData: avaxRes.data,
-        tokenData: tokenRes.data,
-      },
-    });
-  } catch (error) {
-    return res.status(500).send({
-      isSuccess: false,
-      message: 'Failed to fetch data from StarsArena API',
-      statusCode: 500,
-    });
-  }
-};
-
 const tokenTradeAnalysisData = async (req, res) => {
   try {
     const { pair_address } = req.params;
@@ -743,7 +705,7 @@ const tokenTradeAnalysisData = async (req, res) => {
     }
 
     const walletDataList = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.creator_address
+      `SELECT atc.contract_address, atc.symbol, atc.name , atc.lp_deployed ,atc.pair_address , atc.creator_address
        FROM "arena-trade-coins" AS atc
        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
       {
@@ -755,10 +717,11 @@ const tokenTradeAnalysisData = async (req, res) => {
     );
 
     let contract_address = walletDataList[0]?.contract_address;
-
+    let lp_deployed = walletDataList[0].lp_deployed;
     const url = `https://api.arenapro.io/rpc/token_trade_analytics?in_token_contract_address=${contract_address}&in_time_period=24h`;
 
     const response = await axios.get(url);
+    response.data[0].lp_deployed = lp_deployed
 
     return res.status(200).send(
       Response.sendResponse(true, response.data, "Token trade analytics fetched successfully", 200)
@@ -856,7 +819,6 @@ module.exports = {
     tokenListTokens,
     myHoldingTokens,
     transactionBuySellHistory,
-    arenaStartController,
     tokenTradeAnalysisData,
     tokenOhlcData,
     communitiesTopController,
