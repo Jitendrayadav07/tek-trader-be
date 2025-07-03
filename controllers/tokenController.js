@@ -425,7 +425,7 @@ const tokenListTokens = async (req, res) => {
         replacements.search = trimmedSearch;
       } else {
         search_key = `AND (atc.symbol ILIKE :search OR atc.name ILIKE :search)`;
-        replacements.search = `%${trimmedSearch}%`;
+        replacements.search = `${trimmedSearch}`;
       }
     }
 
