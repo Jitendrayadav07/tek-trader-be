@@ -28,7 +28,12 @@ router.get("/tokens-holders/:pair_address",
     tokenController.holdersTokens);
 
 router.get("/communities/top",
+    JoiMiddleWare(tokenSchema.getTopTokenList, "query"),
     tokenController.communitiesTopController);
+
+router.get("/arena",
+    JoiMiddleWare(tokenSchema.listOfTokenSchema, "query"),
+    tokenController.communitiesListOfTokenController);
 
 router.get("/token-trade-analysis/:pair_address",
     tokenController.tokenTradeAnalysisData);
