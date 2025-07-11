@@ -13,11 +13,17 @@ const tokenSchema = {
     }),
 
     getTokenList: Joi.object().keys({
-        count: Joi.number(),
-        offset: Joi.number(),
-        search: Joi.any(),
+        pageSize: Joi.number(),
+        page: Joi.number(),
         sortBy: Joi.any().valid("id"),
         orderBy: Joi.any().valid("asc", "desc"),
+        wallet_address: Joi.string(),
+        search: Joi.any(),
+    }),
+
+    getTopTokenList: Joi.object().keys({
+        pageSize: Joi.number(),
+        page: Joi.number(),
     }),
 
     getAddressData: Joi.object().keys({
@@ -48,5 +54,8 @@ const tokenSchema = {
         wallet_address: Joi.string().required(),
     }),
 
+    listOfTokenSchema :  Joi.object().keys({
+        search: Joi.string(),
+    }),
 };
 module.exports = tokenSchema

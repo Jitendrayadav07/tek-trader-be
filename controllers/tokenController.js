@@ -6,7 +6,9 @@ const { ethers } = require("ethers");
 const { Op, QueryTypes, where } = require("sequelize");
 const Web3 = require("web3");
 const web3 = new Web3();
-
+const fetchStarsArenaCommunities = require("../utils/starsArenaApi")
+const formatCommunityData = require("../utils/communityUtils.js")
+const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js.js");
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
 
 
@@ -348,7 +350,6 @@ const pairTokenDataNew = async (req, res) => {
   }
 };
 
-
 function calculateParticipantsByTimeframe(token_data, timeframes, now) {
   const buyersByTimeframe = {
     m5: new Set(),
@@ -408,152 +409,103 @@ function calculateParticipantsByTimeframe(token_data, timeframes, now) {
 
 const tokenListTokens = async (req, res) => {
   try {
-    let { count, offset, search } = req.query;
+    let { search, wallet_address } = req.query;
+    if (wallet_address && search) {
+      const communities = await fetchStarsArenaCommunities(search);
+      const response = formatCommunityData(communities);
 
-    let search_key = '';
-    let replacements = {
-      count: Number(count),
-      offset: Number(offset)
-    };
+      return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
+    }else if (wallet_address) {
+      console.log("wallet_address",wallet_address)
+      const { data } = await axios.get(
+        `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
+        {
+          params: {
+            pageSize: 200,
+            filterSpamTokens: true,
+            currency: 'usd',
+          },
+          headers: {
+            accept: 'application/json',
+          },
+        }
+      );
 
-    if (search) {
-      const trimmedSearch = search.trim();
-      const isAddress = /^0x[a-fA-F0-9]{40}$/.test(trimmedSearch);
+      const erc20Balances = data.erc20TokenBalances;
+      const tokensWithBalance = erc20Balances.filter(t => t.balance && BigInt(t.balance) > 1n);
+      const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
 
-      if (isAddress) {
-        search_key = `AND (LOWER(atc.contract_address) = LOWER(:search) OR LOWER(atc.pair_address) = LOWER(:search))`;
-        replacements.search = trimmedSearch;
-      } else {
-        search_key = `AND (atc.symbol ILIKE :search OR atc.name ILIKE :search)`;
-        replacements.search = `${trimmedSearch}`;
+      if (tokenAddresses.length === 0) {
+        return res.status(200).send({ isSuccess: true, result: [], message: null, statusCode: 200 });
       }
-    }
 
-    // Step 1: Get total count
-    const token_count = await db.sequelize.query(
-      `SELECT COUNT(*) AS total FROM "arena-trade-coins" AS atc
-       LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
-       WHERE 1=1 ${search_key}`,
-      {
-        replacements,
-        type: db.Sequelize.QueryTypes.SELECT,
-      }
-    );
+      const dbTokens = await db.sequelize.query(
+        `
+          SELECT name, symbol, contract_address, lp_deployed, pair_address
+          FROM "arena-trade-coins"
+          WHERE LOWER(contract_address) IN (:addresses)
+        `,
+        {
+          replacements: { addresses: tokenAddresses },
+          type: db.Sequelize.QueryTypes.SELECT,
+        }
+      )
 
-    // Step 2: Get token list
-    const token_details = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.id, atc.lp_deployed ,atc.contract_address, atc.symbol, atc.lp_deployed, atc.pair_address, atc.name, atc.internal_id, atc.system_created, tm.photo_url AS photo_url
-       FROM "arena-trade-coins" AS atc
-       LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
-       WHERE 1=1 ${search_key}
-       ORDER BY atc.lp_deployed DESC
-       LIMIT :count OFFSET :offset`,
-      {
-        replacements,
-        type: db.Sequelize.QueryTypes.SELECT,
-      }
-    );
+      const dbTokenMap = new Map(dbTokens.map(t => [t.contract_address.toLowerCase(), t]));
 
-    const latestPriceRes = await db.sequelize.query(
-      `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
-      { type: db.Sequelize.QueryTypes.SELECT }
-    );
+      const finalList = tokensWithBalance
+        .map(t => {
+          const match = dbTokenMap.get(t.address.toLowerCase());
+          if (!match) return null;
 
-    const avax_price = parseFloat(latestPriceRes[0].price);
-
-    // Step 3: For each token, get extra data in parallel
-    let token_data = await Promise.all(
-      token_details.map(async (data) => {
-        if (data.lp_deployed === true) {
-          const url = `https://api.dexscreener.com/latest/dex/pairs/avalanche/${data.pair_address}`;
-          const response = await axios.get(url);
-          const pairInfo = response.data?.pair;
-          try {
-            if (pairInfo) {
-              return {
-                ...data,
-                priceUsd: pairInfo?.priceUsd,
-                volume: pairInfo?.volume.h24,
-                marketCap: pairInfo?.marketCap
-              };
-            }
-          } catch (err) {
-            console.error(`Dexscreener error for pair_address ${data.pair_address}:`, err.message);
-          }
-        } else {
-          const trades = await db.ArenaTrade.findAll({
-            where: {
-              token_id: data.internal_id,
-            },
-          });
-
-          const tradeMap = {};
-          for (const trade of trades) {
-            const tid = trade.token_id;
-            if (!tradeMap[tid]) tradeMap[tid] = [];
-            tradeMap[tid].push(trade);
-          }
-
-          const tokenTrades = tradeMap[data.internal_id] || [];
-
-          // 🟩 Calculate latest trade by absolute_tx_position
-          tokenTrades.sort((a, b) => {
-            const aPos = BigInt(a.absolute_tx_position || 0);
-            const bPos = BigInt(b.absolute_tx_position || 0);
-            return aPos > bPos ? 1 : aPos < bPos ? -1 : 0;
-          });
-
-          const latestTrade = tokenTrades[tokenTrades.length - 1] || null;
-          const latest_trade_absolute_order = latestTrade?.absolute_tx_position || null;
-
-          const latest_price_eth = latestTrade?.price_after_eth
-            ? parseFloat(latestTrade.price_after_eth)
-            : 0;
-
-          const latest_price_usd = latest_price_eth * avax_price;
-
-          // 🟩 Sum of transferred AVAX
-          const latest_total_volume_eth = tokenTrades.reduce(
-            (sum, t) => sum + parseFloat(t.transferred_avax || 0),
-            0
-          );
-
-          const latest_total_volume_usd = latest_total_volume_eth * avax_price;
-
-          // 🟩 Calculate latest_supply_eth using BigInt
-          const initialBuyAmount = tokenTrades
-            .filter((t) => t.action === "initial buy")
-            .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
-
-          const totalBuyAmount = tokenTrades
-            .filter((t) => t.action === "buy")
-            .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
-
-          const totalSellAmount = tokenTrades
-            .filter((t) => t.action === "sell")
-            .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
-
-          const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
-          const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+          const balance = parseFloat(t.balance) / 10 ** t.decimals;
+          if (balance < 1) return null;
 
           return {
-            ...data,
-            priceUsd: latest_price_usd,
-            volume: latest_total_volume_usd,
-            marketCap: latest_supply_eth * latest_price_usd
+            name: match.name || t.name,
+            contract_address: t.address,
+            lp_deployed: match.lp_deployed || false,
+            symbol: match.symbol || t.symbol,
+            pair_address: match.pair_address || null,
+            photo_url: t.logoUri || null,
+            balance,
           };
-        }
-      })
-    );
+        })
+        .filter(Boolean);
 
-    let response = token_data.sort((a, b) => b.marketCap - a.marketCap);
+      return res.status(200).send({ isSuccess: true, result: finalList, message: null, statusCode: 200 });
+    }else if(search){
+      console.log("heee")
+      const communities = await fetchStarsArenaCommunities(search);
+      const response = formatCommunityData(communities);
+      return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
+    }else {
+      const { page, pageSize} = req.query;
+      const communities = await StarsArenaTopCommunities(page, pageSize);
+      const response = formatCommunityData(communities);
 
-    return res
-      .status(200)
-      .send(Response.sendResponse(true, { response, length: Number(token_count[0].total) }, null, 200));
+      return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
+    }
   } catch (err) {
-    // console.log("error", err)
+    console.log("err",err)
     return res.status(500).send(Response.sendResponse(false, null, 'Error occurred', 500));
+  }
+};
+
+const communitiesListOfTokenController = async (req, res) => {
+  try {
+    const { search } = req.query;
+
+    if (!search) {
+      return res.status(400).send({isSuccess: false,result: null,message: "Missing search query parameter",statusCode: 400});
+    }
+
+    const communities = await fetchStarsArenaCommunities(search);
+    const response = formatCommunityData(communities);
+
+    return res.status(200).send({isSuccess: true,result: response,message: null,statusCode: 200});
+  } catch (err) {
+    return res.status(500).send({ isSuccess: false, result: null, message: "Error occurred", statusCode: 500 });
   }
 };
 
@@ -640,7 +592,6 @@ const holdersTokens = async (req, res) => {
     return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
   }
 };
-
 
 const transactionBuySellHistory = async (req, res) => {
   try {
@@ -809,20 +760,10 @@ const tokenOhlcData = async (req, res) => {
 
 const communitiesTopController = async (req, res) => {
   try {
-    const response = await axios.get(
-      'https://api.starsarena.com/communities/top',
-      {
-        headers: {
-          'Authorization': `Bearer eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjp7ImlkIjoiZmFiN2Q5ZjEtNWRlZC00N2YyLWI2NTEtM2Q3YmY4ZGNhZjgxIiwidHdpdHRlcklkIjoiNzk2MjQ0Nzg2OTQwNDE2MDAxIiwidHdpdHRlckhhbmRsZSI6ImFzaHVfY2hpa2FuZSIsInR3aXR0ZXJOYW1lIjoiQXNoaXNoIENoaWthbmXwn5S6IiwidHdpdHRlclBpY3R1cmUiOiJodHRwczovL3N0YXRpYy5zdGFyc2FyZW5hLmNvbS91cGxvYWRzLzkwZTc5ZWE3LTNhMDMtZjMxMi0yY2Y5LWNhYmI4OGMzY2Y1NDE3Mjk0ODQ0OTU4MzcucG5nIiwiYWRkcmVzcyI6IjB4ZDUyNjczZjQ2MjBkNzhiOGVhZmI5NTg1OTM1NzIzNjFiY2I2MzAzOCJ9LCJpYXQiOjE3NDk0NDMwNDMsImV4cCI6MTc1ODA4MzA0M30.SzALMP6gjisWvBAeoRcYLsP1wIKmzsyiN3hPxN0b7AfSGaj3GhIk2ZxV2Z0U14mQGfZ_vwHNbuiUp51ATZ0kb0X9TltGI0Ih1pwv-Bdid5-pzXZWO5Xvw0mFa3tOaFklukYF2mqD8blacxlng9n6IlNYhAVIEYxrTu33Bx9onulYwez88PFxAj7X3dBlLNyEMEu-vyahEVjaFHH4Fe4oaMHEXawRsLXz1j-nH64lY79RBwxC-1TwiYslfedrJ8zZ02WAFRdI8CgGzoOj9kD6mgznLXjDcKh5u5tRwsC3u6YpsvxwhWGZA7sGngsrYEpYYVFJAuBlFfA88BOwfRUdsGFCyCwHA8WZP_B-xZBqTpm_gKwtPo--cE9VxZjZxzSS1-8NKru6APCiJPQchZdJSTsDQVgdC_qtqrEufI_orU0sUuIQ0NzPe6yDk9nT8B6OvVL84OTau1XouRCvP4FR8gCtjm6dCWSmPfWytljXl867wrQkePTvtz-1SU5fjMcrm5hfbLiXl2NCa3SQhbQMZCeKCifBqfD9qvkVteT0LM728_0QK4E0iDWuOf7D5Pf2B7_RRn5PJn7WFJVJydOkyBB1tvUYHc_rR5RUoNoQtT84vwoX_w47FmdW3YtVJRf3fqJ3S_B5aVtBYr36DjupF7gRUs0aGqa8wGzO8fptBT0`
-        }
-      }
-    );
-    return res.status(200).send({
-      isSuccess: true,
-      result: response.data,
-      message: null,
-      statusCode: 200
-    });
+    const { page, pageSize} = req.query;
+    const communities = await StarsArenaTopCommunities(page, pageSize);
+    const response = formatCommunityData(communities);
+    return res.status(200).send({isSuccess: true,result: response,message: null,statusCode: 200});
   } catch (err) {
     return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
   }
@@ -958,6 +899,7 @@ module.exports = {
   tokenTradeAnalysisData,
   tokenOhlcData,
   communitiesTopController,
+  communitiesListOfTokenController,
   holdersTokens,
   getInternalIdByPairAddressData,
   getAllTokenBalance,
