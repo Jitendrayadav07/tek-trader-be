@@ -411,12 +411,61 @@ const tokenListTokens = async (req, res) => {
   try {
     let { search, wallet_address } = req.query;
     if (wallet_address && search) {
+      // Fetch community data
       const communities = await fetchStarsArenaCommunities(search);
-      const response = formatCommunityData(communities);
+      let response = formatCommunityData(communities);
+
+      // Fetch balance data from Glacier API
+      const { data } = await axios.get(
+        `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
+        {
+          params: {
+            pageSize: 200,
+            filterSpamTokens: true,
+            currency: 'usd',
+          },
+          headers: {
+            accept: 'application/json',
+          },
+        }
+      );
+
+      const erc20Balances = data.erc20TokenBalances;
+      const tokensWithBalance = erc20Balances.filter(t => t.balance && BigInt(t.balance) > 1n);
+      const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
+
+      if (tokenAddresses.length > 0) {
+        // Fetch matching tokens from database
+        const dbTokens = await db.sequelize.query(
+          `
+            SELECT name, symbol, contract_address, lp_deployed, pair_address
+            FROM "arena-trade-coins"
+            WHERE LOWER(contract_address) IN (:addresses)
+          `,
+          {
+            replacements: { addresses: tokenAddresses },
+            type: db.Sequelize.QueryTypes.SELECT,
+          }
+        );
+
+        const dbTokenMap = new Map(dbTokens.map(t => [t.contract_address.toLowerCase(), t]));
+        const balanceMap = new Map(
+          tokensWithBalance.map(t => [
+            t.address.toLowerCase(),
+            parseFloat(t.balance) / 10 ** t.decimals
+          ])
+        );
+
+        // Add balance to community data
+        response = response.map(community => ({
+          ...community,
+          balance: balanceMap.get(community.contract_address.toLowerCase()) || 0
+        }));
+      }
 
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
-    }else if (wallet_address) {
-      console.log("wallet_address",wallet_address)
+    } else if (wallet_address) {
+      // Fetch balance data from Glacier API
       const { data } = await axios.get(
         `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
         {
@@ -439,6 +488,7 @@ const tokenListTokens = async (req, res) => {
         return res.status(200).send({ isSuccess: true, result: [], message: null, statusCode: 200 });
       }
 
+      // Fetch matching tokens from database to get lp_deployed status
       const dbTokens = await db.sequelize.query(
         `
           SELECT name, symbol, contract_address, lp_deployed, pair_address
@@ -449,33 +499,65 @@ const tokenListTokens = async (req, res) => {
           replacements: { addresses: tokenAddresses },
           type: db.Sequelize.QueryTypes.SELECT,
         }
-      )
+      );
 
       const dbTokenMap = new Map(dbTokens.map(t => [t.contract_address.toLowerCase(), t]));
 
-      const finalList = tokensWithBalance
-        .map(t => {
-          const match = dbTokenMap.get(t.address.toLowerCase());
-          if (!match) return null;
-
-          const balance = parseFloat(t.balance) / 10 ** t.decimals;
-          if (balance < 1) return null;
-
-          return {
-            name: match.name || t.name,
-            contract_address: t.address,
-            lp_deployed: match.lp_deployed || false,
-            symbol: match.symbol || t.symbol,
-            pair_address: match.pair_address || null,
-            photo_url: t.logoUri || null,
-            balance,
-          };
+      // Sort tokens by lp_deployed (true first) and then by balance (descending)
+      const topTokens = tokensWithBalance
+        .map(t => ({
+          address: t.address.toLowerCase(),
+          balance: parseFloat(t.balance) / 10 ** t.decimals,
+          decimals: t.decimals,
+          name: t.name,
+          symbol: t.symbol,
+          logoUri: t.logoUri,
+          lp_deployed: dbTokenMap.get(t.address.toLowerCase())?.lp_deployed || false
+        }))
+        .sort((a, b) => {
+          if (a.lp_deployed === b.lp_deployed) {
+            return b.balance - a.balance; // Same lp_deployed status, sort by balance
+          }
+          return a.lp_deployed ? -1 : 1; // true lp_deployed comes first
         })
-        .filter(Boolean);
+        .slice(0, 5);
 
-      return res.status(200).send({ isSuccess: true, result: finalList, message: null, statusCode: 200 });
+      const topTokenAddresses = topTokens.map(t => t.address);
+
+      // Fetch community data for each token address individually
+      let communities = [];
+      for (const address of topTokenAddresses) {
+        try {
+          const communityData = await fetchStarsArenaCommunities(address);
+          communities = communities.concat(communityData);
+        } catch (error) {
+          console.error(`Error fetching community for address ${address}:`, error);
+        }
+      }
+
+      let response = formatCommunityData(communities);
+
+      // Create balance map for top tokens
+      const balanceMap = new Map(
+        topTokens.map(t => [t.address, t.balance])
+      );
+
+      // Merge community data with balance and database info
+      response = response.map(community => {
+        const match = dbTokenMap.get(community.contract_address.toLowerCase());
+        if (!match) return null;
+        return {
+          ...community,
+          name: match.name || community.name,
+          symbol: match.symbol || community.symbol,
+          lp_deployed: match.lp_deployed || community.lp_deployed,
+          pair_address: match.pair_address || community.pair_address,
+          balance: balanceMap.get(community.contract_address.toLowerCase()) || 0
+        };
+      }).filter(Boolean);
+
+      return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
     }else if(search){
-      console.log("heee")
       const communities = await fetchStarsArenaCommunities(search);
       const response = formatCommunityData(communities);
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
