@@ -19,6 +19,10 @@ router.get("/tokens-list",
     JoiMiddleWare(tokenSchema.getTokenList, "query"),
     tokenController.tokenListTokens);
 
+router.get("/tokens-list-new",
+    // JoiMiddleWare(tokenSchema.getTokenList, "query"),
+    tokenController.tokenListTokensNew);
+
 router.get("/my-holding-tokens",
     JoiMiddleWare(tokenSchema.myHoldingTokensSchema, "query"),
     tokenController.myHoldingTokens);

@@ -9,6 +9,8 @@ const web3 = new Web3();
 const fetchStarsArenaCommunities = require("../utils/starsArenaApi")
 const formatCommunityData = require("../utils/communityUtils.js")
 const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js.js");
+const convertDexDataToCustomFormat = require('../utils/convertDexDataToProperFormat.js');
+const { isContractAddress } = require('../utils/checkContractAddress.js');
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
 
 
@@ -409,9 +411,10 @@ function calculateParticipantsByTimeframe(token_data, timeframes, now) {
 
 const tokenListTokens = async (req, res) => {
   try {
+    console.log("Called ================ >>>")
     let { search, wallet_address } = req.query;
     if (wallet_address && search) {
-      // Fetch community data
+      // Fetch community data   
       const communities = await fetchStarsArenaCommunities(search);
       let response = formatCommunityData(communities);
 
@@ -419,7 +422,7 @@ const tokenListTokens = async (req, res) => {
       const { data } = await axios.get(
         `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
         {
-          params: {
+          params: { 
             pageSize: 200,
             filterSpamTokens: true,
             currency: 'usd',
@@ -466,6 +469,7 @@ const tokenListTokens = async (req, res) => {
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
     } else if (wallet_address) {
       // Fetch balance data from Glacier API
+      console.log("start" , new Date())
       const { data } = await axios.get(
         `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
         {
@@ -479,6 +483,8 @@ const tokenListTokens = async (req, res) => {
           },
         }
       );
+      console.log("end" , new Date())
+
 
       const erc20Balances = data.erc20TokenBalances;
       const tokensWithBalance = erc20Balances.filter(t => t.balance && BigInt(t.balance) > 1n);
@@ -489,6 +495,7 @@ const tokenListTokens = async (req, res) => {
       }
 
       // Fetch matching tokens from database to get lp_deployed status
+      console.log("start 2" , new Date())
       const dbTokens = await db.sequelize.query(
         `
           SELECT name, symbol, contract_address, lp_deployed, pair_address
@@ -500,6 +507,7 @@ const tokenListTokens = async (req, res) => {
           type: db.Sequelize.QueryTypes.SELECT,
         }
       );
+      console.log("end 2" , new Date())
 
       const dbTokenMap = new Map(dbTokens.map(t => [t.contract_address.toLowerCase(), t]));
 
@@ -520,11 +528,15 @@ const tokenListTokens = async (req, res) => {
           }
           return a.lp_deployed ? -1 : 1; // true lp_deployed comes first
         })
-        .slice(0, 5);
+        .slice(0, 5); 
 
       const topTokenAddresses = topTokens.map(t => t.address);
-
+      console.log("top token", topTokenAddresses)
       // Fetch community data for each token address individually
+      // here needs to be checked
+
+
+      console.log("start 3 --", new Date())
       let communities = [];
       for (const address of topTokenAddresses) {
         try {
@@ -535,7 +547,13 @@ const tokenListTokens = async (req, res) => {
         }
       }
 
+
+      console.log("end 3 --", new Date())
+
       let response = formatCommunityData(communities);
+
+
+      console.log("end 3.1 --", new Date())
 
       // Create balance map for top tokens
       const balanceMap = new Map(
@@ -556,8 +574,34 @@ const tokenListTokens = async (req, res) => {
         };
       }).filter(Boolean);
 
+      console.log("and here last", new Date())
+
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
     }else if(search){
+
+  //     let query = `SELECT 
+  //   atc.name,
+  //   atc.symbol,
+  //   atc.internal_id,
+  //   atc.contract_address,
+  //   SUM(at.transferred_avax) AS total_transferred_avax
+  // FROM 
+  //         "arena-trade-coins" AS atc
+  //       JOIN 
+  //         "arena_trades" AS at
+  //       ON 
+  //         at.token_id = atc.internal_id
+  //       WHERE 
+  //         atc.name ILIKE '${search}%'  
+  //       GROUP BY 
+  //         atc.id, atc.name, atc.symbol, atc.internal_id, atc.contract_address
+  //       ORDER BY 
+  //         total_transferred_avax DESC
+  //       LIMIT 5;
+  //     `
+
+  //     let response = await db.sequelize.query(query)
+
       const communities = await fetchStarsArenaCommunities(search);
       const response = formatCommunityData(communities);
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
@@ -574,6 +618,160 @@ const tokenListTokens = async (req, res) => {
   }
 };
 
+// Helper function to fetch DexScreener data
+const fetchDexScreenerData = async (search) => {
+  const url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/${search}`;
+  const response = await axios.get(url);
+  // Filter pairs by chainId - avalanche
+  const avalanchePairs = response.data.pairs.filter(pair => pair.dexId === "arenatrade");
+  return avalanchePairs;
+};
+
+const tokenListTokensNew = async (req, res) => {
+  try {
+    let { search } = req.query;
+
+    if (!search) {
+      search = 'l'
+    }
+
+    let _isContractAddress = await isContractAddress(search)
+
+
+    if(_isContractAddress) {
+      // Find token by contract address from arena-trade-coins
+      const tokenByContract = await db.sequelize.query(
+        `SELECT * FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
+        {
+          replacements: { contract_address: search },
+          type: db.Sequelize.QueryTypes.SELECT,
+        }
+      );
+
+      console.log("token", tokenByContract)
+
+      if (tokenByContract.length > 0) {
+        const token = tokenByContract[0];
+        
+        // If lp_deployed is true, call DexScreener API
+        if (token.lp_deployed == true) {  
+          const avalanchePairs = await fetchDexScreenerData(search);
+          const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+          return res.status(200).send(Response.sendResponse(true, [formattedResponse[0]], null, 200));
+        } else {
+          // Return the token data from database
+          return res.status(200).send(Response.sendResponse(true, token, null, 200));
+        }
+      }
+    }
+
+    else {
+
+      if(search.length <= 2) {
+        const start = Date.now();
+        const avalanchePairs = await fetchDexScreenerData(search);
+        const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+        const end = Date.now();
+        console.log(`Dexscreener API call took ${end - start} ms`);
+        return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
+      } else {
+        // Query arena-trade-coins table for tokens matching the search
+        const dbTokens = await db.sequelize.query(
+          `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
+          {
+            replacements: { search: `${search}%` },
+            type: db.Sequelize.QueryTypes.SELECT,
+          }
+        );
+  
+        // Check if majority of tokens have lp_deployed as true or false
+        if (dbTokens.length > 0) {
+          const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
+          const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
+          
+          if (deployedCount > notDeployedCount) {
+            const avalanchePairs = await fetchDexScreenerData(search);
+            const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+            return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
+          } else {
+            console.log("Equal number of deployed and non-deployed tokens");
+            
+            // Query arena-trade-coins table with join from arena_trades
+            const dbTokensWithTrades = await db.sequelize.query(
+              `SELECT 
+                  c.internal_id,
+                  c.name,
+                  c.symbol,
+                  c.lp_deployed,
+                  c.pair_address,
+                  c.contract_address,
+                  (t.price_after_usd * 10000000000) AS marketCap,
+                  tm.photo_url
+              FROM "arena-trade-coins" c
+              LEFT JOIN (
+                  SELECT DISTINCT ON (token_id) 
+                      token_id,
+                      price_after_usd,
+                      timestamp
+                  FROM arena_trades
+                  WHERE status = 'success'
+                  ORDER BY token_id, timestamp DESC
+              ) t
+              ON c.internal_id = t.token_id
+              LEFT JOIN token_metadata tm
+              ON c.contract_address = tm.contract_address
+              WHERE 
+                  (c.name ILIKE :search OR c.symbol ILIKE :search)
+              ORDER BY marketCap ASC
+              LIMIT 5;`,
+              {
+                replacements: { search: `${search}%` },
+                type: db.Sequelize.QueryTypes.SELECT,
+              }
+            );
+            
+            return res.status(200).send(Response.sendResponse(true,  dbTokensWithTrades , null, 200));
+          }
+        } else {
+          console.log("No tokens found");
+        }
+  
+        // return res.status(200).send(Response.sendResponse(true, { tokens: dbTokens }, null, 200));
+      }
+    }
+
+
+    
+
+
+  } catch (err) {
+    console.error("Error in tokenListTokensNew:", err);
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+}
+
+const tokenListArenaPro = async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q) {
+      return res.status(400).send(Response.sendResponse(false, null, "Search query 'q' is required", 400));
+    }
+
+    const url = `https://api.arenapro.io/tokens_view?or=(creator_twitter_handle.ilike.*${q}*,creator_address.ilike.*${q}*,token_contract_address.ilike.*${q}*,token_name.ilike.*${q}*,token_symbol.ilike.*${q}*)&order=latest_price_usd.desc&limit=20`;
+    
+    const response = await axios.get(url);
+    
+    // Filter tokens where a > 0
+    const filteredData = response.data.filter(token => token.a > 0);
+    
+    return res.status(200).send(Response.sendResponse(true, filteredData, null, 200));
+  } catch (err) {
+    console.error("Error in tokenListArenaPro:", err);
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+}
+
 const communitiesListOfTokenController = async (req, res) => {
   try {
     const { search } = req.query;
@@ -586,6 +784,117 @@ const communitiesListOfTokenController = async (req, res) => {
     const response = formatCommunityData(communities);
 
     return res.status(200).send({isSuccess: true,result: response,message: null,statusCode: 200});
+    // Step 2: Get token list
+    // const token_details = await db.sequelize.query(
+    //   `SELECT atc.contract_address, atc.id, atc.lp_deployed, atc.symbol, atc.lp_deployed, atc.pair_address, atc.name, atc.internal_id, atc.system_created, tm.photo_url AS photo_url
+    //    FROM "arena-trade-coins" AS atc
+    //    LEFT JOIN token_metadata AS tm ON atc.contract_address = tm.contract_address
+    //    WHERE 1=1 ${search_key}
+    //    ORDER BY atc.lp_deployed DESC
+    //    LIMIT :count OFFSET :offset`,
+    //   {
+    //     replacements,
+    //     type: db.Sequelize.QueryTypes.SELECT,
+    //   }
+    // );
+
+    // const latestPriceRes = await db.sequelize.query(
+    //   `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
+    //   { type: db.Sequelize.QueryTypes.SELECT }
+    // );
+
+    // const avax_price = parseFloat(latestPriceRes[0].price);
+
+    // // Step 3: For each token, get extra data in parallel
+    // let token_data = await Promise.all(
+    //   token_details.map(async (data) => {
+    //     if (data.lp_deployed === true) {
+    //       const url = `https://api.dexscreener.com/latest/dex/pairs/avalanche/${data.pair_address}`;
+    //       const response = await axios.get(url);
+    //       const pairInfo = response.data?.pair;
+    //       try {
+    //         if (pairInfo) {
+    //           return {
+    //             ...data,
+    //             priceUsd: pairInfo?.priceUsd,
+    //             volume: pairInfo?.volume.h24,
+    //             marketCap: pairInfo?.marketCap
+    //           };
+    //         }
+    //       } catch (err) {
+    //         console.error(`Dexscreener error for pair_address ${data.pair_address}:`, err.message);
+    //       }
+    //     } else {
+    //       const trades = await db.ArenaTrade.findAll({
+    //         where: {
+    //           token_id: data.internal_id,
+    //         },
+    //       });
+
+    //       const tradeMap = {};
+    //       for (const trade of trades) {
+    //         const tid = trade.token_id;
+    //         if (!tradeMap[tid]) tradeMap[tid] = [];
+    //         tradeMap[tid].push(trade);
+    //       }
+
+    //       const tokenTrades = tradeMap[data.internal_id] || [];
+
+    //       // 🟩 Calculate latest trade by absolute_tx_position
+    //       tokenTrades.sort((a, b) => {
+    //         const aPos = BigInt(a.absolute_tx_position || 0);
+    //         const bPos = BigInt(b.absolute_tx_position || 0);
+    //         return aPos > bPos ? 1 : aPos < bPos ? -1 : 0;
+    //       });
+
+    //       const latestTrade = tokenTrades[tokenTrades.length - 1] || null;
+    //       const latest_trade_absolute_order = latestTrade?.absolute_tx_position || null;
+
+    //       const latest_price_eth = latestTrade?.price_after_eth
+    //         ? parseFloat(latestTrade.price_after_eth)
+    //         : 0;
+
+    //       const latest_price_usd = latest_price_eth * avax_price;
+
+    //       // 🟩 Sum of transferred AVAX
+    //       const latest_total_volume_eth = tokenTrades.reduce(
+    //         (sum, t) => sum + parseFloat(t.transferred_avax || 0),
+    //         0
+    //       );
+
+    //       const latest_total_volume_usd = latest_total_volume_eth * avax_price;
+
+    //       // 🟩 Calculate latest_supply_eth using BigInt
+    //       const initialBuyAmount = tokenTrades
+    //         .filter((t) => t.action === "initial buy")
+    //         .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+
+    //       const totalBuyAmount = tokenTrades
+    //         .filter((t) => t.action === "buy")
+    //         .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+
+    //       const totalSellAmount = tokenTrades
+    //         .filter((t) => t.action === "sell")
+    //         .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+
+    //       const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
+    //       const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+
+    //       return {
+    //         ...data,
+    //         priceUsd: latest_price_usd,
+    //         volume: latest_total_volume_usd,
+    //         marketCap: latest_supply_eth * latest_price_usd
+    //       };
+    //     }
+    //   })
+    // );
+
+    // let response = token_data.sort((a, b) => b.marketCap - a.marketCap);
+
+    // return res
+    //   .status(200)
+    //   .send(Response.sendResponse(true, { response, length: Number(token_count[0].total) }, null, 200));
   } catch (err) {
     return res.status(500).send({ isSuccess: false, result: null, message: "Error occurred", statusCode: 500 });
   }
@@ -985,5 +1294,7 @@ module.exports = {
   holdersTokens,
   getInternalIdByPairAddressData,
   getAllTokenBalance,
-  walletHoldings
+  walletHoldings,
+  tokenListTokensNew,
+  tokenListArenaPro
 }
