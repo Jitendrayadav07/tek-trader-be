@@ -3,7 +3,7 @@ const express = require("express");
 const formData = require("express-form-data");
 const os = require("os");
 const cors = require("cors");
-
+const redisClient = require("./utils/redisClient");
 // Import routes
 const routes = require("./routes");
 
@@ -41,11 +41,26 @@ app.use("/api", routes);
 // ✅ SOCKET.IO Setup
 // ======================
 const initSocket = require("./socket");
+
 initSocket(server); 
 
 
+redisClient.connect()
+  .then(() => {
+    console.log("✅ Connected to Redis");
+
+    const PORT = 43000;
+    server.listen(PORT, () => {
+      console.log(`🚀 Server is running on port ${PORT}.`);
+    });
+  })
+  .catch((err) => {
+    console.error("❌ Redis connection failed:", err);
+    process.exit(1);
+  });
+
 // set port, listen for requests
-const PORT = 43000;
-server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}.`);
-});
+
+// server.listen(PORT,async () => {
+//   console.log(`Server is running on port ${PORT}.`);
+// });
