@@ -48,15 +48,15 @@ initSocket(server);
 redisClient.connect()
   .then(() => {
     console.log("✅ Connected to Redis");
-
-    const PORT = 43000;
-    server.listen(PORT, () => {
-      console.log(`🚀 Server is running on port ${PORT}.`);
-    });
   })
   .catch((err) => {
     console.error("❌ Redis connection failed:", err);
     process.exit(1);
+  });
+
+  const PORT = 43000;
+  server.listen(PORT, () => {
+    console.log(`🚀 Server is running on port ${PORT}.`);
   });
 
 // set port, listen for requests
