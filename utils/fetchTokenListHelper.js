@@ -6,7 +6,7 @@ const convertDexDataToCustomFormat = require("./convertDexDataToProperFormat");
 
 // Create axios instance with keep-alive configuration
 const axiosInstance = axios.create({
-    timeout: 10000,
+    timeout: 3000,
     headers: {
       'Accept-Encoding': 'gzip, deflate, br',
     },
@@ -56,17 +56,20 @@ const handleWalletAndSearch = async (req, res) => {
     if (!search) search = 'l';
   
     const tokens = await getTokensBySearch(search);
+
+    console.log(search)
     return res.status(200).send(Response.sendResponse(true, tokens, null, 200));
   };
 
   
   const getTokensBySearch = async (search) => {
     const isContract = await isContractAddress(search);
-  
+    console.log("is", isContract)
     if (isContract) {
       const tokenMeta = await getTokenByContract(search);
+      console.log("token", tokenMeta)
       if (!tokenMeta) return [];
-  
+      
       return tokenMeta.lp_deployed
         ? convertDexDataToCustomFormat(await fetchDexScreenerData(search))
         : await getDbTokensWithTrades(search);
@@ -110,7 +113,7 @@ const handleWalletAndSearch = async (req, res) => {
 
   
   const getDbTokensWithTrades = async (search) => {
-    return db.sequelize.query(
+    let res =  await db.sequelize.query(
       `SELECT 
           c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
           (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
@@ -118,10 +121,10 @@ const handleWalletAndSearch = async (req, res) => {
        LEFT JOIN (
            SELECT DISTINCT ON (token_id) token_id, price_after_usd, timestamp
            FROM arena_trades
-           WHERE status = 'success'
+           WHERE status = 'success' 
            ORDER BY token_id, timestamp DESC
        ) t ON c.internal_id = t.token_id
-       LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
+       INNER JOIN token_metadata tm ON c.contract_address = tm.contract_address
        WHERE LOWER(c.contract_address) = LOWER(:search) OR c.name ILIKE :search OR c.symbol ILIKE :search
        ORDER BY marketCap ASC
        LIMIT 5`,
@@ -130,6 +133,8 @@ const handleWalletAndSearch = async (req, res) => {
         type: db.Sequelize.QueryTypes.SELECT,
       }
     );
+    console.log("res", res)
+    return res;
   };
 
   
