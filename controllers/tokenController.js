@@ -2,7 +2,7 @@ const axios = require('axios');
 
 // Create axios instance with keep-alive configuration
 const axiosInstance = axios.create({
-  timeout: 3000,
+  timeout: 5000,
   headers: {
     'Accept-Encoding': 'gzip, deflate, br',
   },
@@ -1028,6 +1028,7 @@ const tokenListTokensMerged = async (req, res) => {
     // ----------------------- CASE 2 -----------------------
     // wallet_address only
     else if (wallet_address) {
+
       const { data } = await axiosInstance.get(
         `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
         {
@@ -1059,7 +1060,9 @@ const tokenListTokensMerged = async (req, res) => {
     
       let processed_data = [];
     
-      // ✅ Loop & cache each lp_deployed=true token
+      // ✅ Loop cached, batch missing
+      const uncachedContracts = [];
+    
       for (const token of lp_true_tokens) {
         const cacheKey = `dex:contract:${token.contract_address.toLowerCase()}`;
         const cached = await redisClient.get(cacheKey);
@@ -1068,18 +1071,28 @@ const tokenListTokensMerged = async (req, res) => {
           const formatted = JSON.parse(cached);
           processed_data.push(...formatted);
         } else {
-          try {
-            const response = await axiosInstance.get(`https://api.dexscreener.com/tokens/v1/avalanche/${token.contract_address}`);
-            const formatted = convertDexDataToCustomFormat(response.data);
-            processed_data.push(...formatted);
-            await redisClient.set(cacheKey, JSON.stringify(formatted), { EX: 120 });
-          } catch (err) {
-            console.error(`DexScreener API error for ${token.contract_address}:`, err.message);
-          }
+          uncachedContracts.push(token.contract_address.toLowerCase());
         }
       }
     
-      // 🔁 Process lp_deployed=false tokens (no Redis needed)
+      // ✅ Batch-fetch uncached contracts
+      if (uncachedContracts.length > 0) {
+        try {
+          const dexUrl = `https://api.dexscreener.com/tokens/v1/avalanche/${uncachedContracts.join(',')}`;
+          const response = await axiosInstance.get(dexUrl);
+          const formatted = convertDexDataToCustomFormat(response.data);
+          processed_data.push(...formatted);
+    
+          for (const token of formatted) {
+            const key = `dex:contract:${token.contract_address.toLowerCase()}`;
+            await redisClient.set(key, JSON.stringify([token]), { EX: 120 });
+          }
+        } catch (err) {
+          console.error('DexScreener batch API error:', err.message);
+        }
+      }
+    
+      // 🔁 Process lp_deployed=false tokens (no Redis)
       if (lp_false_tokens.length > 0) {
         const lowerCaseTokens = lp_false_tokens.map(el => el.contract_address.toLowerCase());
         const query = `SELECT 
@@ -1104,14 +1117,18 @@ const tokenListTokensMerged = async (req, res) => {
         processed_data.push(...non_lp_data);
       }
     
-      // 🔢 Attach balances
+      // 🔢 Add balances
       for (let i = 0; i < processed_data.length; i++) {
-        const found = tokensWithBalance.find(el => el.address.toLowerCase() === processed_data[i]?.contract_address?.toLowerCase());
+        const found = tokensWithBalance.find(
+          el => el.address.toLowerCase() === processed_data[i]?.contract_address?.toLowerCase()
+        );
         processed_data[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0;
       }
     
       return res.status(200).send(Response.sendResponse(true, processed_data, null, 200));
     }
+    
+    
 
 // ----------------------- CASE 3 -----------------------
 // Only search OR nothing
@@ -1119,7 +1136,7 @@ else {
   if (!search) {
     search = 'l'; // default fallback
   }
-
+  
   const _isContractAddress = await isContractAddress(search);
 
   // 🔹 If search is a contract address
