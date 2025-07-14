@@ -392,6 +392,10 @@ const pairTokenDataNew = async (req, res) => {
 
     const imageUrl = tokenMetadata ? tokenMetadata.photo_url : null;
 
+    const liquidityQuote = token_data.reduce((sum, t) => sum + parseFloat(t.transferred_avax || 0), 0);
+    const liquidityUsd = liquidityQuote * avax_price;
+    const liquidityBase = totalSupply;
+
     return res.status(200).json({
       isSuccess: true,
       result: {
@@ -411,10 +415,15 @@ const pairTokenDataNew = async (req, res) => {
           name: "Wrapped AVAX",
           symbol: "WAVAX",
         },
-        priceNative: priceNative.toFixed(8),
-        priceUsd: priceUsd.toFixed(8),
+        priceNative: priceNative.toFixed(10),
+        priceUsd: priceUsd.toFixed(9),
         txns,
         volume: volume_usd,
+        liquidity: {
+          usd: Number(liquidityUsd.toFixed(2)),
+          base: Number(liquidityBase.toFixed(2)),
+          quote: Number(liquidityQuote.toFixed(6)),
+        },
         fdv: Number(fdv.toFixed(2)),
         marketCap: Number(marketCap.toFixed(2)),
         pairCreatedAt: token.system_created,
@@ -1269,6 +1278,12 @@ const transactionBuySellHistory = async (req, res) => {
     const { pair_address } = req.params;
     const limit = Number(req.query.limit) || 10;
     const offset = Number(req.query.offset) || 0;
+        
+    if (!pair_address) {
+      return res.status(400).send(
+        Response.sendResponse(false, null, "Pair address is required", 400)
+      );
+    }
 
     const walletDataList = await db.sequelize.query(
       `SELECT atc.contract_address, atc.symbol, atc.name , atc.pair_address , atc.lp_deployed , atc.creator_address
@@ -1282,9 +1297,9 @@ const transactionBuySellHistory = async (req, res) => {
       }
     );
 
-    if (!pair_address) {
+    if (!walletDataList || walletDataList.length === 0) {
       return res.status(400).send(
-        Response.sendResponse(false, null, "Pair address is required", 400)
+        Response.sendResponse(false, null, "Pair address not found", 400)
       );
     }
 
