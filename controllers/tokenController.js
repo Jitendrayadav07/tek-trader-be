@@ -436,11 +436,12 @@ function calculateParticipantsByTimeframe(token_data, timeframes, now) {
 
 // Helper function to fetch DexScreener data
 const fetchDexScreenerData = async (search) => {
-  const url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/${search}`;
+  let url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/ARENATRADE`;
+  if(search) 
+    url = url + `/${search}`
+
   const response = await axiosInstance.get(url);
-  // Filter pairs by chainId - avalanche
-  const avalanchePairs = response.data.pairs.filter(pair => pair.dexId === "arenatrade");
-  return avalanchePairs;
+  return response.data.pairs;
 };
 
 const tokenListTokens = async (req, res) => {
@@ -806,7 +807,6 @@ const tokenListTokensNew = async (req, res) => {
     }
 
     else {
-
       if(search.length <= 2) {
         const start = Date.now();
         const avalanchePairs = await fetchDexScreenerData(search);
@@ -890,339 +890,73 @@ const tokenListTokensMerged = async (req, res) => {
   try {
     let { search, wallet_address } = req.query;
 
-    // ----------------------- CASE 1 -----------------------
-    // wallet_address + search present
-    if (wallet_address && search) {
-      let formattedResponse;
-    
-      const _isContractAddress = await isContractAddress(search);
-    
-      if (_isContractAddress) {
-        const tokenByContract = await db.sequelize.query(
-          `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
-          {
-            replacements: { contract_address: search },
-            type: db.Sequelize.QueryTypes.SELECT,
-          }
-        );
-    
-        if (tokenByContract.length > 0) {
-          const token = tokenByContract[0];
-    
-          if (token.lp_deployed === true) {
-            const cacheKey = `dex:contract:${search.toLowerCase()}`;
-            const cached = await redisClient.get(cacheKey);
-    
-            if (cached) {
-              formattedResponse = JSON.parse(cached);
-            } else {
-              const avalanchePairs = await fetchDexScreenerData(search);
-              formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
-              await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
-            }
-          } else {
-            const dbTokensWithTrades = await db.sequelize.query(
-              `SELECT 
-                  c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
-                  (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
-               FROM "arena-trade-coins" c
-               LEFT JOIN (
-                   SELECT DISTINCT ON (token_id) token_id, price_after_usd, timestamp
-                   FROM arena_trades
-                   WHERE status = 'success'
-                   ORDER BY token_id, timestamp DESC
-               ) t ON c.internal_id = t.token_id
-               LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-               WHERE LOWER(c.contract_address) = LOWER(:contract_address)
-               LIMIT 5;`,
-              {
-                replacements: { contract_address: search },
-                type: db.Sequelize.QueryTypes.SELECT,
-              }
-            );
-            formattedResponse = dbTokensWithTrades;
-          }
+    const _isContractAddress = await isContractAddress(search);
+
+    // 🔹 If search is a contract address
+    if (_isContractAddress) {
+
+      const tokenByContract = await db.sequelize.query(
+        `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
+        {
+          replacements: { contract_address: search },
+          type: db.Sequelize.QueryTypes.SELECT,
         }
-      } else {
-        if (search.length <= 2) {
-          const cacheKey = `dex:search:${search.toLowerCase()}`;
+      );
+
+
+      if (tokenByContract.length > 0) {
+        const token = tokenByContract[0];
+
+        if (token.lp_deployed === true) {
+          const cacheKey = `dex:contract:${search.toLowerCase()}`;
           const cached = await redisClient.get(cacheKey);
-    
+
           if (cached) {
-            formattedResponse = JSON.parse(cached);
+            const formatted = JSON.parse(cached);
+            return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           } else {
+
             const avalanchePairs = await fetchDexScreenerData(search);
-            formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
-            await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
+            const formatted = convertDexDataToCustomFormat(avalanchePairs);
+            await redisClient.set(cacheKey, JSON.stringify(formatted), { EX: 120 });
+            return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           }
         } else {
-          const dbTokens = await db.sequelize.query(
-            `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
+          const dbTokensWithTrades = await db.sequelize.query(  
+            `SELECT 
+                c.internal_id,
+                c.name,
+                c.symbol,
+                c.lp_deployed,
+                c.pair_address,
+                c.contract_address,
+                (t.price_after_usd * 10000000000) AS marketCap,
+                tm.photo_url
+            FROM "arena-trade-coins" c
+            LEFT JOIN LATERAL (
+                SELECT token_id, price_after_usd, timestamp
+                FROM arena_trades
+                WHERE status = 'success' AND token_id = c.internal_id
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ) t ON true
+            LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
+            WHERE LOWER(c.contract_address) = LOWER(:contract_address)
+            LIMIT 1;`,
             {
-              replacements: { search: `${search}%` },
+              replacements: { contract_address: search },
               type: db.Sequelize.QueryTypes.SELECT,
             }
           );
-    
-          if (dbTokens.length > 0) {
-            const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
-            const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
-    
-            if (deployedCount > notDeployedCount) {
-              const cacheKey = `dex:search:${search.toLowerCase()}`;
-              const cached = await redisClient.get(cacheKey);
-    
-              if (cached) {
-                formattedResponse = JSON.parse(cached);
-              } else {
-                const avalanchePairs = await fetchDexScreenerData(search);
-                formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
-                await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
-              }
-            } else {
-              formattedResponse = await db.sequelize.query(
-                `SELECT 
-                    c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
-                    (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
-                 FROM "arena-trade-coins" c
-                 LEFT JOIN (
-                     SELECT DISTINCT ON (token_id) token_id, price_after_usd, timestamp
-                     FROM arena_trades
-                     WHERE status = 'success'
-                     ORDER BY token_id, timestamp DESC
-                 ) t ON c.internal_id = t.token_id
-                 LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-                 WHERE c.name ILIKE :search OR c.symbol ILIKE :search
-                 ORDER BY marketCap ASC
-                 LIMIT 5;`,
-                {
-                  replacements: { search: `${search}%` },
-                  type: db.Sequelize.QueryTypes.SELECT,
-                }
-              );
-            }
-          }
+          return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
         }
       }
-    
-      // Add balances
-      const { data } = await axiosInstance.get(
-        `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
-        {
-          params: { pageSize: 200, filterSpamTokens: true, currency: 'usd' },
-          headers: { accept: 'application/json' },
-        }
-      );
-    
-      const tokensWithBalance = data.erc20TokenBalances.filter(t => t.balance && BigInt(t.balance) > 1n);
-      const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
-    
-      for (let i = 0; i < formattedResponse.length; i++) {
-        const found = tokensWithBalance.find(el => el.address.toLowerCase() === formattedResponse[i]?.contract_address?.toLowerCase());
-        formattedResponse[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0;
-      }
-    
-      return res.status(200).send({ isSuccess: true, result: formattedResponse, message: null, statusCode: 200 });
     }
 
-    // ----------------------- CASE 2 -----------------------
-    // wallet_address only
-    else if (wallet_address) {
-
-      const { data } = await axiosInstance.get(
-        `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
-        {
-          params: { pageSize: 200, filterSpamTokens: true, currency: 'usd' },
-          headers: { accept: 'application/json' },
-        }
-      );
-    
-      const erc20Balances = data.erc20TokenBalances;
-      const tokensWithBalance = erc20Balances.filter(t => t.balance && BigInt(t.balance) > 1n);
-      const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
-    
-      if (tokenAddresses.length === 0) {
-        return res.status(200).send({ isSuccess: true, result: [], message: null, statusCode: 200 });
-      }
-    
-      const dbTokens = await db.sequelize.query(
-        `SELECT name, symbol, contract_address, lp_deployed, pair_address
-         FROM "arena-trade-coins"
-         WHERE LOWER(contract_address) IN (:addresses)`,
-        {
-          replacements: { addresses: tokenAddresses },
-          type: db.Sequelize.QueryTypes.SELECT,
-        }
-      );
-    
-      const lp_true_tokens = dbTokens.filter(el => el.lp_deployed);
-      const lp_false_tokens = dbTokens.filter(el => !el.lp_deployed);
-    
-      let processed_data = [];
-    
-      // ✅ Loop cached, batch missing
-      const uncachedContracts = [];
-    
-      for (const token of lp_true_tokens) {
-        const cacheKey = `dex:contract:${token.contract_address.toLowerCase()}`;
-        const cached = await redisClient.get(cacheKey);
-    
-        if (cached) {
-          const formatted = JSON.parse(cached);
-          processed_data.push(...formatted);
-        } else {
-          uncachedContracts.push(token.contract_address.toLowerCase());
-        }
-      }
-    
-      // ✅ Batch-fetch uncached contracts
-      if (uncachedContracts.length > 0) {
-        try {
-          const dexUrl = `https://api.dexscreener.com/tokens/v1/avalanche/${uncachedContracts.join(',')}`;
-          const response = await axiosInstance.get(dexUrl);
-          const formatted = convertDexDataToCustomFormat(response.data);
-          processed_data.push(...formatted);
-    
-          for (const token of formatted) {
-            const key = `dex:contract:${token.contract_address.toLowerCase()}`;
-            await redisClient.set(key, JSON.stringify([token]), { EX: 120 });
-          }
-        } catch (err) {
-          console.error('DexScreener batch API error:', err.message);
-        }
-      }
-    
-      // 🔁 Process lp_deployed=false tokens (no Redis)
-      if (lp_false_tokens.length > 0) {
-        const lowerCaseTokens = lp_false_tokens.map(el => el.contract_address.toLowerCase());
-        const query = `SELECT 
-            c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
-            (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
-           FROM "arena-trade-coins" c
-           LEFT JOIN (
-               SELECT DISTINCT ON (token_id) token_id, price_after_usd, timestamp
-               FROM arena_trades
-               WHERE status = 'success'
-               ORDER BY token_id, timestamp DESC
-           ) t ON c.internal_id = t.token_id
-           LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-           WHERE LOWER(c.contract_address) IN (:contract_addresses)
-           LIMIT 5;`;
-    
-        const non_lp_data = await db.sequelize.query(query, {
-          replacements: { contract_addresses: lowerCaseTokens },
-          type: db.Sequelize.QueryTypes.SELECT,
-        });
-    
-        processed_data.push(...non_lp_data);
-      }
-    
-      // 🔢 Add balances
-      for (let i = 0; i < processed_data.length; i++) {
-        const found = tokensWithBalance.find(
-          el => el.address.toLowerCase() === processed_data[i]?.contract_address?.toLowerCase()
-        );
-        processed_data[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0;
-      }
-    
-      return res.status(200).send(Response.sendResponse(true, processed_data, null, 200));
-    }
-    
-    
-
-// ----------------------- CASE 3 -----------------------
-// Only search OR nothing
-else {
-  if (!search) {
-    search = 'l'; // default fallback
-  }
-  
-  const _isContractAddress = await isContractAddress(search);
-
-  // 🔹 If search is a contract address
-  if (_isContractAddress) {
-    const tokenByContract = await db.sequelize.query(
-      `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
-      {
-        replacements: { contract_address: search },
-        type: db.Sequelize.QueryTypes.SELECT,
-      }
-    );
-
-    if (tokenByContract.length > 0) {
-      const token = tokenByContract[0];
-
-      if (token.lp_deployed === true) {
-        const cacheKey = `dex:contract:${search.toLowerCase()}`;
-        const cached = await redisClient.get(cacheKey);
-
-        if (cached) {
-          const formatted = JSON.parse(cached);
-          return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
-        } else {
-          const avalanchePairs = await fetchDexScreenerData(search);
-          const formatted = convertDexDataToCustomFormat(avalanchePairs);
-          await redisClient.set(cacheKey, JSON.stringify(formatted), { EX: 120 });
-          return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
-        }
-      } else {
-        const dbTokensWithTrades = await db.sequelize.query(
-          `SELECT 
-              c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
-              (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
-           FROM "arena-trade-coins" c
-           LEFT JOIN (
-               SELECT DISTINCT ON (token_id) token_id, price_after_usd, timestamp
-               FROM arena_trades
-               WHERE status = 'success'
-               ORDER BY token_id, timestamp DESC
-           ) t ON c.internal_id = t.token_id
-           LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-           WHERE LOWER(c.contract_address) = LOWER(:contract_address)
-           LIMIT 5;`,
-          {
-            replacements: { contract_address: search },
-            type: db.Sequelize.QueryTypes.SELECT,
-          }
-        );
-        return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
-      }
-    }
-  }
-
-  // 🔹 If search is short (e.g., symbol like "usdt")
-  if (search.length <= 2) {
-    const cacheKey = `dex:search:${search.toLowerCase()}`;
-    const cached = await redisClient.get(cacheKey);
-
-    if (cached) {
-      const formattedResponse = JSON.parse(cached);
-      return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
-    } else {
-      const avalanchePairs = await fetchDexScreenerData(search);
-      const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
-      await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
-      return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
-    }
-  }
-
-  // 🔹 Name or symbol match from DB
-  const dbTokens = await db.sequelize.query(
-    `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
-    {
-      replacements: { search: `${search}%` },
-      type: db.Sequelize.QueryTypes.SELECT,
-    }
-  );
-
-  if (dbTokens.length > 0) {
-    const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
-    const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
-
-    if (deployedCount > notDeployedCount) {
-      const cacheKey = `dex:search:${search.toLowerCase()}`;
+    // 🔹 If search is short (e.g., symbol like "usdt")
+    if (search?.length <= 2 || !search) {
+      const cacheKey = `dex:search:${search?.toLowerCase()}`;
       const cached = await redisClient.get(cacheKey);
-
       if (cached) {
         const formattedResponse = JSON.parse(cached);
         return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
@@ -1232,34 +966,62 @@ else {
         await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
         return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
       }
-    } else {
-      const dbTokensWithTrades = await db.sequelize.query(
-        `SELECT 
-            c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
-            (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
-         FROM "arena-trade-coins" c
-         LEFT JOIN (
-             SELECT DISTINCT ON (token_id) token_id, price_after_usd, timestamp
-             FROM arena_trades
-             WHERE status = 'success'
-             ORDER BY token_id, timestamp DESC
-         ) t ON c.internal_id = t.token_id
-         LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-         WHERE c.name ILIKE :search OR c.symbol ILIKE :search
-         ORDER BY marketCap ASC
-         LIMIT 5;`,
-        {
-          replacements: { search: `${search}%` },
-          type: db.Sequelize.QueryTypes.SELECT,
-        }
-      );
-      return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
     }
-  }
 
-  // 🔚 Fallback if nothing found
-  return res.status(200).send(Response.sendResponse(true, [], null, 200));
-}
+    // 🔹 Name or symbol match from DB
+    const dbTokens = await db.sequelize.query(
+      `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
+      {
+        replacements: { search: `${search}%` },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    if (dbTokens.length > 0) {
+      const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
+      const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
+
+      if (deployedCount > notDeployedCount) {
+        const cacheKey = `dex:search:${search.toLowerCase()}`;
+        const cached = await redisClient.get(cacheKey);
+
+        if (cached) {
+          const formattedResponse = JSON.parse(cached);
+          return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
+        } else {
+          const avalanchePairs = await fetchDexScreenerData(search);
+          const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+          await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
+          return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
+        }
+      } else {
+        const dbTokensWithTrades = await db.sequelize.query(
+          `SELECT 
+              c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
+              (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
+          FROM "arena-trade-coins" c
+          LEFT JOIN LATERAL (
+                SELECT token_id, price_after_usd, timestamp
+                FROM arena_trades
+                WHERE status = 'success' AND token_id = c.internal_id
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ) t ON true
+          LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
+          WHERE c.name ILIKE :search OR c.symbol ILIKE :search
+          ORDER BY marketCap ASC
+          LIMIT 5;`,
+          {
+            replacements: { search: `${search}%` },
+            type: db.Sequelize.QueryTypes.SELECT,
+          }
+        );
+        return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
+      }
+    }
+
+    // 🔚 Fallback if nothing found
+    return res.status(200).send(Response.sendResponse(true, [], null, 200));
   } catch (err) {
     console.error("Merged Function Error:", err);
     return res.status(500).send(Response.sendResponse(false, null, 'Error occurred', 500));
