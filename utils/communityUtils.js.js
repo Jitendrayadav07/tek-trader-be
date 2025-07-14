@@ -11,7 +11,7 @@ function formatCommunityData(communities = []) {
       priceUsd: (community.stats?.marketCapUsd / community.stats?.totalSupply) * 1e18 || 0,
       volume: (community.stats?.buyVolume || 0) + (community.stats?.sellVolume || 0),
       marketCap: community.stats?.marketCapUsd || 0
-    }));
+    })).sort((a, b) => b.marketCap - a.marketCap);
   }
   
 module.exports = formatCommunityData;

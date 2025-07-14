@@ -15,9 +15,13 @@ router.get("/pair-token-details/avalanche/:pairId",
 router.get("/pair-token-details-new/avalanche/:pairId",
     tokenController.pairTokenDataNew);
 
-router.get("/tokens-list",
-    JoiMiddleWare(tokenSchema.getTokenList, "query"),
-    tokenController.tokenListTokens);
+// router.get("/tokens-list",
+//     JoiMiddleWare(tokenSchema.getTokenList, "query"),
+//     tokenController.tokenListTokens);
+
+router.get("/tokens-list-new",
+    // JoiMiddleWare(tokenSchema.getTokenList, "query"),
+    tokenController.tokenListTokensMerged);
 
 router.get("/my-holding-tokens",
     JoiMiddleWare(tokenSchema.myHoldingTokensSchema, "query"),
