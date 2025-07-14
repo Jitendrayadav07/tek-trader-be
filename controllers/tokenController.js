@@ -240,9 +240,8 @@ const pairTokenDataNew = async (req, res) => {
         .send(Response.sendResponse(false, null, "Pair address is required", 400));
     }
 
-    // Query your DB
     const pairData = await db.sequelize.query(
-      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address,  atc.lp_deployed, atc.creator_address, atc.internal_id, atc.supply ,atc.system_created
+      `SELECT atc.contract_address, atc.symbol, atc.name, atc.pair_address, atc.lp_deployed, atc.creator_address, atc.internal_id, atc.supply, atc.system_created
        FROM "arena-trade-coins" AS atc 
        WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
       {
@@ -261,178 +260,180 @@ const pairTokenDataNew = async (req, res) => {
 
     const token_data = await db.sequelize.query(
       `SELECT atc.pair_address, atc.contract_address, atc.supply, at.token_id, atc.internal_id, atc.lp_deployed,
-              at.action, at.from_address, at.amount, atc.name, at.timestamp, at.status
+              at.action, at.from_address, at.amount, atc.name, at.timestamp, at.status, at.transferred_avax, at.avax_price, at.price_after_eth, at.price_after_usd
        FROM "arena_trades" AS at 
        LEFT JOIN "arena-trade-coins" AS atc ON at.token_id = atc.internal_id 
-       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)`,
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)
+       ORDER BY at.timestamp ASC`,
       {
         replacements: { pair_address: token.pair_address },
         type: db.Sequelize.QueryTypes.SELECT,
       }
     );
-    let token_type = "prebonded"
-    // ✅ Calculate txns for m5, h1, h6, h24
-    const now = new Date();
 
+    const latest_data = token_data.length > 0 ? [token_data[token_data.length - 1]] : [];
+    const latestTrade = latest_data[0] || {};
+    const priceNative = Number(latestTrade.price_after_eth || 0);
+    const priceUsd = Number(latestTrade.price_after_usd || 0);
+
+
+    const totalSupply = 1e10;
+    const marketCap = totalSupply * priceUsd;
+    const fdv = marketCap;
+
+    const latestPriceRes = await db.sequelize.query(
+      `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
+      { type: db.Sequelize.QueryTypes.SELECT }
+    );
+    const avax_price = latestPriceRes.length ? Number(latestPriceRes[0].price) : 0;
+
+    // 5️⃣ Timeframes
+    const now = Date.now();
     const timeframes = {
-      m5: 5 * 60 * 1000,        // 5 min in ms
-      h1: 60 * 60 * 1000,       // 1 hr in ms
-      h6: 6 * 60 * 60 * 1000,   // 6 hr in ms
-      h24: 24 * 60 * 60 * 1000, // 24 hr in ms
+      m5: 5 * 60 * 1000,
+      h1: 60 * 60 * 1000,
+      h6: 6 * 60 * 60 * 1000,
+      h24: 24 * 60 * 60 * 1000,
     };
 
-    const txns = {
-      m5: { buys: 0, sells: 0 },
-      h1: { buys: 0, sells: 0 },
-      h6: { buys: 0, sells: 0 },
-      h24: { buys: 0, sells: 0 },
-    };
-
-    token_data.forEach(txn => {
-      const txnTime = new Date(txn.timestamp);
-      const diff = now - txnTime; // difference in ms
-
-      for (const [key, window] of Object.entries(timeframes)) {
-        if (diff <= window) {
-          if (
-            txn.action.toLowerCase() === 'buy' ||
-            txn.action.toLowerCase() === 'initial buy'
-          ) {
-            txns[key].buys += 1;
-          } else if (txn.action.toLowerCase() === 'sell') {
-            txns[key].sells += 1;
-          }
-        }
+    function getVolumeByTimeframeJS(trades) {
+      const result = {};
+      for (const [key, ms] of Object.entries(timeframes)) {
+        result[key] = trades
+          .filter(t => t.status === 'success' && (now - new Date(t.timestamp).getTime()) <= ms)
+          .reduce((sum, t) => sum + parseFloat(t.transferred_avax || 0), 0);
       }
+      return result;
+    }
+
+    function getBuySellCountsByTimeframeJS(trades) {
+      const result = {};
+      for (const [key, ms] of Object.entries(timeframes)) {
+        const filtered = trades.filter(t => t.status === 'success' && (now - new Date(t.timestamp).getTime()) <= ms);
+        result[key] = {
+          buys: filtered.filter(t => t.action === 'buy' || t.action === 'initial buy').length,
+          sells: filtered.filter(t => t.action === 'sell').length,
+        };
+      }
+      return result;
+    }
+
+    function getParticipantsByTimeframeJS(trades) {
+      const result = {};
+      for (const [key, ms] of Object.entries(timeframes)) {
+        const filtered = trades.filter(t => t.status === 'success' && (now - new Date(t.timestamp).getTime()) <= ms);
+        result[key] = {
+          buyers: new Set(filtered.filter(t => t.action === 'buy' || t.action === 'initial buy').map(t => t.from_address)).size,
+          sellers: new Set(filtered.filter(t => t.action === 'sell').map(t => t.from_address)).size,
+          makers: new Set(filtered.map(t => t.from_address)).size,
+        };
+      }
+      return result;
+    }
+
+    function getBuySellVolumeByTimeframeJS(trades, avax_price) {
+      const result = {};
+      for (const [key, ms] of Object.entries(timeframes)) {
+        const filtered = trades.filter(t => t.status === 'success' && (now - new Date(t.timestamp).getTime()) <= ms);
+        result[key] = {
+          buy: filtered.filter(t => t.action === 'buy' || t.action === 'initial buy').reduce((sum, t) => sum + parseFloat(t.transferred_avax || 0) * avax_price, 0),
+          sell: filtered.filter(t => t.action === 'sell').reduce((sum, t) => sum + parseFloat(t.transferred_avax || 0) * avax_price, 0),
+        };
+      }
+      return result;
+    }
+
+    // 10️⃣ Calculate all metrics
+    const volume = getVolumeByTimeframeJS(token_data);
+    const volume_usd = {
+      m5: Number((volume.m5 * avax_price).toFixed(2)),
+      h1: Number((volume.h1 * avax_price).toFixed(2)),
+      h6: Number((volume.h6 * avax_price).toFixed(2)),
+      h24: Number((volume.h24 * avax_price).toFixed(2)),
+    };
+
+    const txns = getBuySellCountsByTimeframeJS(token_data);
+
+    const participantsRaw = getParticipantsByTimeframeJS(token_data);
+    const participants = {
+      m5: { buyers: participantsRaw.m5.buyers, sellers: participantsRaw.m5.sellers, makers: participantsRaw.m5.buyers + participantsRaw.m5.sellers },
+      h1: { buyers: participantsRaw.h1.buyers, sellers: participantsRaw.h1.sellers, makers: participantsRaw.h1.buyers + participantsRaw.h1.sellers },
+      h6: { buyers: participantsRaw.h6.buyers, sellers: participantsRaw.h6.sellers, makers: participantsRaw.h6.buyers + participantsRaw.h6.sellers },
+      h24: { buyers: participantsRaw.h24.buyers, sellers: participantsRaw.h24.sellers, makers: participantsRaw.h24.buyers + participantsRaw.h24.sellers },
+    };
+
+    const buySellVolume = getBuySellVolumeByTimeframeJS(token_data, avax_price);
+    const buySellVolume_usd = {
+      m5: {
+        buy: Number(buySellVolume.m5.buy.toFixed(2)),
+        sell: Number(buySellVolume.m5.sell.toFixed(2)),
+      },
+      h1: {
+        buy: Number(buySellVolume.h1.buy.toFixed(2)),
+        sell: Number(buySellVolume.h1.sell.toFixed(2)),
+      },
+      h6: {
+        buy: Number(buySellVolume.h6.buy.toFixed(2)),
+        sell: Number(buySellVolume.h6.sell.toFixed(2)),
+      },
+      h24: {
+        buy: Number(buySellVolume.h24.buy.toFixed(2)),
+        sell: Number(buySellVolume.h24.sell.toFixed(2)),
+      },
+    };
+
+    const tokenMetadata = await db.TokenMetadata.findOne({
+      where: { bc_group_id: token.internal_id },
     });
 
-    const baseToken = {
-      address: token.contract_address,
-      name: token.name,
-      symbol: token.symbol,
-    };
+    const latest_holder_count = new Set(
+      token_data.map((t) => t.from_address && t.from_address.toLowerCase())
+    ).size;
 
+    const imageUrl = tokenMetadata ? tokenMetadata.photo_url : null;
 
-    const participants = calculateParticipantsByTimeframe(token_data, timeframes, now);
-
-    const quoteToken = {
-      address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
-      name: "Wrapped AVAX",
-      symbol: "WAVAX",
-    };
-
-    const result = {
-      token: token_type,
-      lp_deployed: token.lp_deployed,
-      chainId: "avalanche",
-      dexId: "arenatrade",
-      url: `https://dexscreener.com/avalanche/${token.pair_address}`,
-      pairAddress: token.pair_address,
-      baseToken,
-      quoteToken,
-      priceNative: "0",
-      priceUsd: "0",
-      txns, // ✅ here’s your live counts
-      participants,
-      volume: {
-        m5: 0,
-        h1: 0,
-        h6: 0,
-        h24: 0,
+    return res.status(200).json({
+      isSuccess: true,
+      result: {
+        token: "prebonded",
+        lp_deployed: token.lp_deployed,
+        chainId: "avalanche",
+        dexId: "arenatrade",
+        url: `https://dexscreener.com/avalanche/${token.pair_address}`,
+        pairAddress: token.pair_address,
+        baseToken: {
+          address: token.contract_address,
+          name: token.name,
+          symbol: token.symbol,
+        },
+        quoteToken: {
+          address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+          name: "Wrapped AVAX",
+          symbol: "WAVAX",
+        },
+        priceNative: priceNative.toFixed(8),
+        priceUsd: priceUsd.toFixed(8),
+        txns,
+        volume: volume_usd,
+        fdv: Number(fdv.toFixed(2)),
+        marketCap: Number(marketCap.toFixed(2)),
+        pairCreatedAt: token.system_created,
+        participants,
+        buySellVolume: buySellVolume_usd,
+        holders: latest_holder_count,
+        info: {
+          imageUrl: imageUrl,
+        },
       },
-      priceChange: {
-        h1: 0,
-        h6: 0,
-        h24: 0,
-      },
-      liquidity: {
-        usd: 0,
-        base: 0,
-        quote: 0,
-      },
-      fdv: 0,
-      marketCap: 0,
-      pairCreatedAt: token.system_created,
-      buyers: 0,
-      sellers: 0,
-      makers: 0,
-      info: {
-        imageUrl: "",
-        header: "",
-        openGraph: "",
-        websites: [],
-        socials: [],
-      },
-    };
-
-    return res
-      .status(200)
-      .send({ isSuccess: true, result, message: null, statusCode: 200 });
+      message: null,
+      statusCode: 200,
+    });
 
   } catch (err) {
     console.error(err);
-    return res
-      .status(500)
-      .send(Response.sendResponse(false, null, "Error occurred", 500));
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
   }
 };
-
-function calculateParticipantsByTimeframe(token_data, timeframes, now) {
-  const buyersByTimeframe = {
-    m5: new Set(),
-    h1: new Set(),
-    h6: new Set(),
-    h24: new Set(),
-  };
-
-  const sellersByTimeframe = {
-    m5: new Set(),
-    h1: new Set(),
-    h6: new Set(),
-    h24: new Set(),
-  };
-
-  token_data.forEach(txn => {
-    const txnTime = new Date(txn.timestamp);
-    const diff = now - txnTime;
-    const addr = txn.from_address.toLowerCase();
-    const action = txn.action.toLowerCase();
-
-    for (const [key, window] of Object.entries(timeframes)) {
-      if (diff <= window) {
-        if (action === 'buy' || action === 'initial buy') {
-          buyersByTimeframe[key].add(addr);
-        } else if (action === 'sell') {
-          sellersByTimeframe[key].add(addr);
-        }
-      }
-    }
-  });
-
-  return {
-    m5: {
-      buyers: buyersByTimeframe.m5.size,
-      sellers: sellersByTimeframe.m5.size,
-      makers: buyersByTimeframe.m5.size + sellersByTimeframe.m5.size
-
-    },
-    h1: {
-      buyers: buyersByTimeframe.h1.size,
-      sellers: sellersByTimeframe.h1.size,
-      makers: buyersByTimeframe.h1.size + sellersByTimeframe.h1.size
-    },
-    h6: {
-      buyers: buyersByTimeframe.h6.size,
-      sellers: sellersByTimeframe.h6.size,
-      makers: buyersByTimeframe.h6.size + sellersByTimeframe.h6.size,
-    },
-    h24: {
-      buyers: buyersByTimeframe.h24.size,
-      sellers: sellersByTimeframe.h24.size,
-      makers: buyersByTimeframe.h24.size + sellersByTimeframe.h24.size,
-    },
-  };
-}
 
 // Helper function to fetch DexScreener data
 const fetchDexScreenerData = async (search) => {
