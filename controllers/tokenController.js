@@ -978,10 +978,9 @@ const tokenListTokensMerged = async (req, res) => {
     );
 
     if (dbTokens.length > 0) {
-      const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
-      const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
+      const deployedCount = dbTokens.some(token => token.lp_deployed === true);
 
-      if (deployedCount > notDeployedCount) {
+      if (deployedCount) {
         const cacheKey = `dex:search:${search.toLowerCase()}`;
         const cached = await redisClient.get(cacheKey);
 
