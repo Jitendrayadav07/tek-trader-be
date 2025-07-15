@@ -1276,38 +1276,101 @@ const myHoldingTokens = async (req, res) => {
 const holdersTokens = async (req, res) => {
   try {
     const { pair_address } = req.params;
-    const { limit, offset } = req.query;
+
     if (!pair_address) {
-      return res.status(400).send(Response.sendResponse(false, null, "Missing pair address parameter", 400));
+      return res.status(400).send(Response.sendResponse(false, null, "Contract address is required", 400));
     }
 
-    const response = await db.sequelize.query(
-      `SELECT at.from_address, atc.pair_address, atc.contract_address, atc.lp_deployed, atc.internal_id ,atc.supply
-        FROM "arena-trade-coins" AS atc
-        LEFT JOIN "arena_trades" AS at ON at.token_id = atc.internal_id
+    // 1. Get Token Info
+    const tokenInfo = await db.sequelize.query(
+      `
+        SELECT internal_id, contract_address
+        FROM "arena-trade-coins"
         WHERE LOWER(pair_address) = LOWER(:pair_address)
-        GROUP BY at.from_address, atc.pair_address, atc.contract_address, atc.internal_id,atc.supply,atc.lp_deployed
-        LIMIT :limit OFFSET :offset`,
+        LIMIT 1
+      `,
       {
-        replacements: { pair_address: pair_address, limit: Number(limit) || 10, offset: Number(offset) || 0 },
+        replacements: { pair_address },
         type: db.Sequelize.QueryTypes.SELECT,
       }
     );
-    for (let i = 0; i < response.length; i++) {
-      const contract = new ethers.Contract(response[i].contract_address, ERC20_ABI, provider);
-      const [balance, decimals] = await Promise.all([
-        contract.balanceOf(response[i].from_address),
-        contract.decimals()
-      ]);
-      const formattedBalance = ethers.formatUnits(balance, decimals);
-      const formattedSupply = ethers.formatUnits(BigInt(response[i].supply), decimals);
-      const percentOfSupply = (Number(formattedBalance) / Number(formattedSupply)) * 100;
-      response[i].amount = formattedBalance;
-      response[i].percentOfSupply = percentOfSupply.toFixed(2);
+
+    if (!tokenInfo.length) {
+      return res.status(404).send(Response.sendResponse(false, null, "Token not found", 404));
     }
 
-    return res.status(200).send(Response.sendResponse(true, { response }, "Holders Data", 200));
+    const tokenId = tokenInfo[0].internal_id;
+    const contractAddress = tokenInfo[0].contract_address;
+
+    // 2. Get USD Price from DB
+    const priceResult = await db.sequelize.query(
+      `
+        SELECT price_after_usd
+        FROM arena_trades
+        WHERE token_id = :tokenId AND status = 'success'
+        ORDER BY timestamp DESC
+        LIMIT 1
+      `,
+      {
+        replacements: { tokenId },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    const priceUsd = priceResult.length ? parseFloat(priceResult[0].price_after_usd) : 0;
+
+    // 3. Get All Addresses From DB Trades
+    const rawHolders = await db.sequelize.query(
+      `
+        SELECT DISTINCT LOWER(from_address) AS address
+        FROM arena_trades
+        WHERE token_id = :tokenId
+      `,
+      {
+        replacements: { tokenId },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+
+    // 4. Fetch On-Chain Data Using Ethers
+    const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
+    const contract = new ethers.Contract(contractAddress, ERC20_ABI, provider);
+
+    const [totalSupplyRaw, decimals] = await Promise.all([
+      contract.totalSupply(),
+      contract.decimals()
+    ]);
+    const totalSupply = ethers.formatUnits(totalSupplyRaw, decimals);
+
+    const holders = [];
+
+    for (const { address } of rawHolders) {
+      const balanceRaw = await contract.balanceOf(address);
+      const balance = ethers.formatUnits(balanceRaw, decimals);
+      const balanceNum = parseFloat(balance);
+
+      if (balanceNum > 0) {
+        const usdValue = priceUsd * balanceNum;
+        const percentSupply = (balanceNum / parseFloat(totalSupply)) * 100;
+
+        holders.push({
+          address,
+          balance: balanceNum.toLocaleString("en-US"),
+          usd_value: `$${usdValue.toFixed(6)}`,
+          percent_supply: `${percentSupply.toFixed(4)}%`,
+        });
+      }
+    }
+
+    // 5. Sort by Balance Desc
+    holders.sort((a, b) => parseFloat(b.balance.replace(/,/g, '')) - parseFloat(a.balance.replace(/,/g, '')));
+
+    const ranked = holders.map((holder, index) => ({ ...holder, rank: index + 1 }));
+
+    return res.status(200).send(Response.sendResponse(true, { holders: ranked }, "Holders Data", 200));
+
   } catch (err) {
+    console.error("holdersTokens error:", err);
     return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
   }
 };
