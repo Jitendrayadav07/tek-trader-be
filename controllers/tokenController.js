@@ -986,7 +986,9 @@ const tokenListTokensMerged = async (req, res) => {
         formattedResponse = JSON.parse(cached);
       } else {
         const avalanchePairs = await fetchDexScreenerData(search);
-        formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+        let dexData = convertDexDataToCustomFormat(avalanchePairs);
+        // remove Tek if there in the array => do not want duplicate entry
+        formattedResponse = dexData.filter(el => el.contract_address.toLowerCase() !== '0x96f4a78c19a273d95fb082800911db66648b0670'.toLowerCase())
         await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 3600 });
       }
 
