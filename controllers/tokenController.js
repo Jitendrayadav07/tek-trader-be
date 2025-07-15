@@ -445,8 +445,15 @@ const pairTokenDataNew = async (req, res) => {
 };
 
 // Helper function to fetch DexScreener data
-const fetchDexScreenerData = async (search) => {
-  let url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/ARENATRADE`;
+// for tek we add a value and it searches only tek.
+// here search would be the contract address
+const fetchDexScreenerData = async (search, from = null) => {
+  let url = ''
+  if(from)
+    url = `https://api.dexscreener.com/latest/dex/search?q=`
+  else{
+    url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/ARENATRADE`;
+  }
   if(search) 
     url = url + `/${search}`
 
@@ -926,10 +933,9 @@ const tokenListTokensMerged = async (req, res) => {
             const formatted = JSON.parse(cached);
             return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           } else {
-
-            const avalanchePairs = await fetchDexScreenerData(search);
+            const avalanchePairs = await fetchDexScreenerData(search, "contract_address");
             const formatted = convertDexDataToCustomFormat(avalanchePairs);
-            await redisClient.set(cacheKey, JSON.stringify(formatted), { EX: 120 });
+            await redisClient.set(cacheKey, JSON.stringify(formatted), { EX: 3600 });
             return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           }
         } else {
@@ -969,17 +975,18 @@ const tokenListTokensMerged = async (req, res) => {
     if (!search) {
       const cacheKey = `dex:search:${search?.toLowerCase()}`;
       const cached = await redisClient.get(cacheKey);
-      const cachedTekToken = `dex:custom-tek`;
+      const tekSearchContractAddress = '0x96f4a78c19a273d95fb082800911db66648b0670'.toLowerCase();
+      const cachedTekToken = `dex:contract:${tekSearchContractAddress}`;
       const isTekCached = await redisClient.get(cachedTekToken)
       let formattedResponse;
       let tekResponse;
       if(isTekCached) {
-        tekResponse = JSON.parse(cachedTekToken)
-      }else{
-        let tekSearchContractAddress = '0x96f4a78c19a273d95fb082800911db66648b0670'
-        const avalanchePairs = await fetchDexScreenerData(tekSearchContractAddress);
+        tekResponse = JSON.parse(isTekCached)
+      }else{  
+
+        const avalanchePairs = await fetchDexScreenerData(tekSearchContractAddress, 'tek');
         tekResponse = convertDexDataToCustomFormat(avalanchePairs);
-        await redisClient.set(cacheKey, JSON.stringify(tekResponse), { EX: 3600 });
+        await redisClient.set(cachedTekToken, JSON.stringify(tekResponse), { EX: 3600 });
       }
 
       if (cached) {
