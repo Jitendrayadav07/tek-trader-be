@@ -964,8 +964,37 @@ const tokenListTokensMerged = async (req, res) => {
       }
     }
 
+    // 🔹 If no search is provided 
+    // Need tek at the top
+    if (!search) {
+      const cacheKey = `dex:search:${search?.toLowerCase()}`;
+      const cached = await redisClient.get(cacheKey);
+      const cachedTekToken = `dex:custom-tek`;
+      const isTekCached = await redisClient.get(cachedTekToken)
+      let formattedResponse;
+      let tekResponse;
+      if(isTekCached) {
+        tekResponse = JSON.parse(cachedTekToken)
+      }else{
+        let tekSearchContractAddress = '0x96f4a78c19a273d95fb082800911db66648b0670'
+        const avalanchePairs = await fetchDexScreenerData(tekSearchContractAddress);
+        tekResponse = convertDexDataToCustomFormat(avalanchePairs);
+        await redisClient.set(cacheKey, JSON.stringify(tekResponse), { EX: 3600 });
+      }
+
+      if (cached) {
+        formattedResponse = JSON.parse(cached);
+      } else {
+        const avalanchePairs = await fetchDexScreenerData(search);
+        formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+        await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 3600 });
+      }
+
+      return res.status(200).send(Response.sendResponse(true, [...tekResponse,...formattedResponse], null, 200));
+    }
+
     // 🔹 If search is short (e.g., symbol like "usdt")
-    if (search?.length <= 2 || !search) {
+    if (search?.length <= 2) {
       const cacheKey = `dex:search:${search?.toLowerCase()}`;
       const cached = await redisClient.get(cacheKey);
       if (cached) {
