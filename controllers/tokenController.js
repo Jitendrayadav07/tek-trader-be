@@ -451,7 +451,8 @@ const fetchDexScreenerData = async (search) => {
     url = url + `/${search}`
 
   const response = await axiosInstance.get(url);
-  return response.data.pairs;
+  const avalanchePairs = response.data.pairs.filter(pair => pair.dexId === "arenatrade");
+  return avalanchePairs;
 };
 
 const tokenListTokens = async (req, res) => {
