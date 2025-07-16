@@ -81,6 +81,7 @@ const recentTokens = async (req, res) => {
         token_id: {
           [Op.in]: tokenIds,
         },
+        status: 'success'
       },
     });
 
