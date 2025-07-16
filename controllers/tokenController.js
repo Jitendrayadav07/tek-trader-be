@@ -1427,7 +1427,7 @@ const transactionBuySellHistory = async (req, res) => {
         atc.lp_deployed
       FROM "arena-trade-coins" AS atc 
       LEFT JOIN "arena_trades" AS at ON atc.internal_id = at.token_id
-      WHERE LOWER(atc.contract_address) = LOWER(:contract_address)
+      WHERE LOWER(atc.contract_address) = LOWER(:contract_address) AND at.status = 'success'
       ORDER BY at.timestamp DESC
       LIMIT :limit OFFSET :offset
       `,
