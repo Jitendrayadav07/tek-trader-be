@@ -264,7 +264,7 @@ const pairTokenDataNew = async (req, res) => {
               at.action, at.from_address, at.amount, atc.name, at.timestamp, at.status, at.transferred_avax, at.avax_price, at.price_after_eth, at.price_after_usd
        FROM "arena_trades" AS at 
        LEFT JOIN "arena-trade-coins" AS atc ON at.token_id = atc.internal_id 
-       WHERE LOWER(atc.pair_address) = LOWER(:pair_address)
+       WHERE LOWER(atc.pair_address) = LOWER(:pair_address) AND at.status = 'success'
        ORDER BY at.timestamp ASC`,
       {
         replacements: { pair_address: token.pair_address },
