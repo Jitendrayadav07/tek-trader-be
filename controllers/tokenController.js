@@ -463,6 +463,11 @@ const fetchDexScreenerData = async (search, from = null) => {
   return avalanchePairs;
 };
 
+const fetchMultipleTokensDexScreener = async (tokens) => {
+  const response = await axiosInstance.get(`https://api.dexscreener.com/tokens/v1/avalanche/`+tokens);
+  return response;
+}
+
 const tokenListTokens = async (req, res) => {
   try {
     let { search, wallet_address } = req.query;
@@ -1018,9 +1023,35 @@ const tokenListTokensMerged = async (req, res) => {
       }
     }
 
+    let query = `
+        SELECT 
+            c.internal_id,
+            c.name,
+            c.symbol,
+            c.lp_deployed,
+            c.pair_address,
+            c.contract_address,
+            (COALESCE(t.price_after_usd, 0) * 10000000000) AS marketCap,
+            tm.photo_url
+        FROM "arena-trade-coins" c
+        LEFT JOIN LATERAL (
+            SELECT token_id, price_after_usd, timestamp
+            FROM arena_trades
+            WHERE status = 'success' AND token_id = c.internal_id
+            ORDER BY timestamp DESC
+            LIMIT 1
+        ) t ON true
+        LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
+        WHERE c.name ILIKE :search OR c.symbol ILIKE :search
+        ORDER BY 
+        c.lp_deployed DESC, 
+        marketCap DESC
+        LIMIT 10;
+    `
+
     // 🔹 Name or symbol match from DB
     const dbTokens = await db.sequelize.query(
-      `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
+      query,
       {
         replacements: { search: `${search}%` },
         type: db.Sequelize.QueryTypes.SELECT,
@@ -1028,45 +1059,16 @@ const tokenListTokensMerged = async (req, res) => {
     );
 
     if (dbTokens.length > 0) {
-      const deployedCount = dbTokens.some(token => token.lp_deployed === true);
-
-      if (deployedCount) {
-        const cacheKey = `dex:search:${search.toLowerCase()}`;
-        const cached = await redisClient.get(cacheKey);
-
-        if (cached) {
-          const formattedResponse = JSON.parse(cached);
-          return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
-        } else {
-          const avalanchePairs = await fetchDexScreenerData(search);
-          const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
-          await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 120 });
-          return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
-        }
-      } else {
-        const dbTokensWithTrades = await db.sequelize.query(
-          `SELECT 
-              c.internal_id, c.name, c.symbol, c.lp_deployed, c.pair_address, c.contract_address,
-              (t.price_after_usd * 10000000000) AS marketCap, tm.photo_url
-          FROM "arena-trade-coins" c
-          LEFT JOIN LATERAL (
-                SELECT token_id, price_after_usd, timestamp
-                FROM arena_trades
-                WHERE status = 'success' AND token_id = c.internal_id
-                ORDER BY timestamp DESC
-                LIMIT 1
-            ) t ON true
-          LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-          WHERE c.name ILIKE :search OR c.symbol ILIKE :search
-          ORDER BY marketCap ASC
-          LIMIT 5;`,
-          {
-            replacements: { search: `${search}%` },
-            type: db.Sequelize.QueryTypes.SELECT,
-          }
-        );
-        return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
+      const lpDeployedTrueTokens = dbTokens.filter(el => el.lp_deployed);
+      const lpDeployedFalseTokens = dbTokens.filter(el => !el.lp_deployed);
+      let multipleTokensFormattedResponse = [];
+      if(lpDeployedTrueTokens.length) {
+        const tokenContractAddresses = lpDeployedTrueTokens.map(token => token.contract_address).join(',')
+        let multipleTokensResponse = await fetchMultipleTokensDexScreener(tokenContractAddresses)
+        multipleTokensFormattedResponse = convertDexDataToCustomFormat(multipleTokensResponse.data);
       }
+
+      return res.status(200).send(Response.sendResponse(true, [...multipleTokensFormattedResponse,...lpDeployedFalseTokens], null, 200));
     }
 
     // 🔚 Fallback if nothing found
