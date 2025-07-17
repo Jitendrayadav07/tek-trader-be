@@ -272,6 +272,22 @@ const pairTokenDataNew = async (req, res) => {
       }
     );
 
+    // 🟩 Calculate latest_supply_eth using BigInt
+    const initialBuyAmount = token_data
+      .filter((t) => t.action === "initial buy")
+      .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+
+    const totalBuyAmount = token_data
+      .filter((t) => t.action === "buy")
+      .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+
+    const totalSellAmount = token_data
+      .filter((t) => t.action === "sell")
+      .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+
+    const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
+    const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+
     const latest_data = token_data.length > 0 ? [token_data[token_data.length - 1]] : [];
     const latestTrade = latest_data[0] || {};
     const priceNative = Number(latestTrade.price_after_eth || 0);
@@ -279,7 +295,7 @@ const pairTokenDataNew = async (req, res) => {
 
 
     const totalSupply = 1e10;
-    const marketCap = totalSupply * priceUsd;
+    const marketCap = latest_supply_eth * priceUsd;
     const fdv = marketCap;
 
     const latestPriceRes = await db.sequelize.query(
