@@ -1678,6 +1678,22 @@ const walletHoldings = async (req, res) => {
   }
 };
 
+const liquidityStatus = async(req,res) => {
+  try{
+    let { pair_address } = req.params;
+    const response = await db.sequelize.query(
+      `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(pair_address) = LOWER(:pair_address)`,
+      {
+        replacements: { pair_address: pair_address.toLowerCase() },
+        type: db.Sequelize.QueryTypes.SELECT,
+      }
+    );
+    return res.status(200).send(Response.sendResponse(true, response, null, 200));
+  }catch(err){
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+}
+
 
 
 module.exports = {
@@ -1697,5 +1713,6 @@ module.exports = {
   walletHoldings,
   tokenListTokensNew,
   tokenListArenaPro,
-  tokenListTokensMerged
+  tokenListTokensMerged,
+  liquidityStatus
 }

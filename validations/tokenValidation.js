@@ -57,5 +57,9 @@ const tokenSchema = {
     listOfTokenSchema :  Joi.object().keys({
         search: Joi.string(),
     }),
+
+    liquidityStatus: Joi.object().keys({
+        pair_address: Joi.string().required(),
+    }),
 };
 module.exports = tokenSchema
