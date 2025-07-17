@@ -60,4 +60,8 @@ router.get("/wallet-holdings",
     JoiMiddleWare(tokenSchema.walletHoldingsSchema, "query"),
     tokenController.walletHoldings);
 
+router.get("/liquidity-status/:pair_address",
+    JoiMiddleWare(tokenSchema.liquidityStatus, "params"),
+    tokenController.liquidityStatus);
+
 module.exports = router;
