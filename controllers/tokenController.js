@@ -38,6 +38,8 @@ const { isContractAddress } = require('../utils/checkContractAddress.js');
 const redisClient = require('../utils/redisClient.js');
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
 const {sumAmountByAction, getSupplyEth} = require('../utils/calculateMarketCap');
+const { getLastestAvaxPrice } = require('../services/getLatestAvaxPrice.js');
+const { getSumOfTotalBuyAndSell } = require('../utils/calculatingPriceEth.js');
 
 /**
  * Utility to sum token amounts by action type
@@ -100,10 +102,7 @@ const recentTokens = async (req, res) => {
       tradeMap[tid].push(trade);
     }
 
-    const latestPriceRes = await db.sequelize.query(
-      `SELECT price FROM avax_price_live ORDER BY fetched_at DESC LIMIT 1`,
-      { type: db.Sequelize.QueryTypes.SELECT }
-    );
+    const latestPriceRes = await getLastestAvaxPrice()
 
     if (!latestPriceRes.length) {
       throw new Error("AVAX price not found in avax_price_live table");
@@ -153,8 +152,6 @@ const recentTokens = async (req, res) => {
         const initialBuyAmount = sumAmountByAction(tokenTrades, "initial buy");
         const totalBuyAmount = sumAmountByAction(tokenTrades, "buy");
         const totalSellAmount = sumAmountByAction(tokenTrades, "sell");
-        // const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
-        // // const latest_supply_eth = Number(latest_supply_wei) / 1e18;
         const latest_supply_eth = getSupplyEth(initialBuyAmount, totalBuyAmount, totalSellAmount)
         
 
@@ -292,7 +289,9 @@ const pairTokenDataNew = async (req, res) => {
 
 
     const totalSupply = 1e10;
-    const marketCap = latest_supply_eth * priceUsd;
+
+    const marketCap =  Number(latest_supply_eth.toFixed(6)) *  Number(priceUsd.toFixed(12)) 
+
     const fdv = marketCap;
 
     const latestPriceRes = await db.sequelize.query(
@@ -958,27 +957,67 @@ const tokenListTokensMerged = async (req, res) => {
             return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           }
         } else {
+          let query = `
+          SELECT 
+          atc.pair_address, 
+          atc.contract_address, 
+          atc.supply, 
+          atc.internal_id, 
+          atc.lp_deployed, 
+          atc.name,
+          atc.symbol,
+          
+          -- Add photo_url from token_metadata
+          tm.photo_url,
+
+          -- Supply calculation in WEI
+          SUM(CASE WHEN at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) +
+          SUM(CASE WHEN at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) -
+          SUM(CASE WHEN at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) AS latest_supply_wei,
+
+          -- Latest price_after_usd from most recent trade
+          (
+            SELECT at2.price_after_usd
+            FROM arena_trades at2
+            WHERE at2.token_id = at.token_id AND at2.status = 'success'
+            ORDER BY at2.timestamp DESC
+            LIMIT 1
+          ) AS latest_price_usd,
+
+          -- MarketCap = supply in ETH * latest USD price
+          (
+            (
+              SUM(CASE WHEN at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) +
+              SUM(CASE WHEN at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) -
+              SUM(CASE WHEN at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END)
+            ) / 1e18
+          ) *
+          (
+            SELECT at2.price_after_usd
+            FROM arena_trades at2
+            WHERE at2.token_id = at.token_id AND at2.status = 'success'
+            ORDER BY at2.timestamp DESC
+            LIMIT 1
+          ) AS marketcap
+
+      FROM arena_trades at
+      LEFT JOIN "arena-trade-coins" atc ON at.token_id = atc.internal_id
+      LEFT JOIN token_metadata tm ON atc.contract_address = tm.contract_address  -- Join added for photo_url
+      WHERE LOWER(atc.contract_address) = LOWER(:contract_address) AND at.status = 'success'
+      GROUP BY 
+          atc.pair_address, 
+          atc.contract_address, 
+          atc.supply, 
+          at.token_id, 
+          atc.internal_id, 
+          atc.lp_deployed, 
+          atc.name, 
+          atc.symbol, 
+          tm.photo_url;  -- Include in GROUP BY
+          `
+          
           const dbTokensWithTrades = await db.sequelize.query(  
-            `SELECT 
-                c.internal_id,
-                c.name,
-                c.symbol,
-                c.lp_deployed,
-                c.pair_address,
-                c.contract_address,
-                (t.price_after_usd * 10000000000) AS marketCap,
-                tm.photo_url
-            FROM "arena-trade-coins" c
-            LEFT JOIN LATERAL (
-                SELECT token_id, price_after_usd, timestamp
-                FROM arena_trades
-                WHERE status = 'success' AND token_id = c.internal_id
-                ORDER BY timestamp DESC
-                LIMIT 1
-            ) t ON true
-            LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-            WHERE LOWER(c.contract_address) = LOWER(:contract_address)
-            LIMIT 1;`,
+            query,
             {
               replacements: { contract_address: search },
               type: db.Sequelize.QueryTypes.SELECT,
@@ -1036,6 +1075,8 @@ const tokenListTokensMerged = async (req, res) => {
       }
     }
 
+
+    // this is when searched
     let query = `
         SELECT 
             c.internal_id,
@@ -1062,6 +1103,7 @@ const tokenListTokensMerged = async (req, res) => {
         LIMIT 10;
     `
 
+
     // 🔹 Name or symbol match from DB
     const dbTokens = await db.sequelize.query(
       query,
@@ -1081,7 +1123,41 @@ const tokenListTokensMerged = async (req, res) => {
         multipleTokensFormattedResponse = convertDexDataToCustomFormat(multipleTokensResponse.data);
       }
 
-      return res.status(200).send(Response.sendResponse(true, [...multipleTokensFormattedResponse,...lpDeployedFalseTokens], null, 200));
+      // here the logic for the no lptokens
+      const currentAvaxPrice = await getLastestAvaxPrice();
+
+
+      for(let i = 0; i < lpDeployedFalseTokens.length; i++) {
+        const response = await db.sequelize.query(`SELECT price_after_eth from public.arena_trades where token_id = ${lpDeployedFalseTokens[i].internal_id} order by timestamp DESC, absolute_tx_position DESC LIMIT 1`,
+        { type: db.sequelize.QueryTypes.SELECT })
+
+
+        const latest_price_usd = parseFloat(response[0]?.price_after_eth) * parseFloat(currentAvaxPrice[0].price);
+
+        const volume = await getSumOfTotalBuyAndSell(db.sequelize, lpDeployedFalseTokens[i].internal_id)
+
+
+        if(((volume[0].total_buy - volume[0].total_sell) == 0 || volume[0].total_buy - volume[0].total_sell < 0) && volume[0].total_sell != 0) {
+          console.log("token is thoop")
+          lpDeployedFalseTokens[i].marketcap = '0'
+          continue;
+        }
+
+        const latest_supply_wei = volume[0].total_buy - volume[0].total_sell;
+        const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+
+
+        lpDeployedFalseTokens[i].latest_price_usd =  Number(latest_price_usd.toFixed(12));
+        lpDeployedFalseTokens[i].latest_supply_eth =  Number(latest_supply_eth.toFixed(6));
+        // took Frontend formula
+        lpDeployedFalseTokens[i].marketcap =  Number(latest_supply_eth.toFixed(6)) *  Number(latest_price_usd.toFixed(12)) 
+
+      }
+
+      let sorted = [...multipleTokensFormattedResponse,...lpDeployedFalseTokens].sort((a,b) => b.marketcap - a.marketcap)
+
+
+      return res.status(200).send(Response.sendResponse(true, sorted, null, 200));
     }
 
     // 🔚 Fallback if nothing found
