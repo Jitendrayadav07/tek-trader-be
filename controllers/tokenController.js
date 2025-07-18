@@ -128,7 +128,7 @@ const recentTokens = async (req, res) => {
           ? parseFloat(latestTrade.price_after_eth)
           : 0;
 
-        const latest_price_usd = latest_price_eth * avax_price;
+        const latest_price_usd = latest_price_eth * latestTrade.avax_price;
 
         // 🟩 Sum of transferred AVAX
         const latest_total_volume_eth = tokenTrades.reduce(
@@ -290,6 +290,7 @@ const pairTokenDataNew = async (req, res) => {
 
     const totalSupply = 1e10;
 
+    // latest_price_eth
     const marketCap =  Number(latest_supply_eth.toFixed(6)) *  Number(priceUsd.toFixed(12)) 
 
     const fdv = marketCap;
@@ -1128,11 +1129,11 @@ const tokenListTokensMerged = async (req, res) => {
 
 
       for(let i = 0; i < lpDeployedFalseTokens.length; i++) {
-        const response = await db.sequelize.query(`SELECT price_after_eth from public.arena_trades where token_id = ${lpDeployedFalseTokens[i].internal_id} order by timestamp DESC, absolute_tx_position DESC LIMIT 1`,
+        const response = await db.sequelize.query(`SELECT price_after_eth,avax_price from public.arena_trades where token_id = ${lpDeployedFalseTokens[i].internal_id} order by timestamp DESC, absolute_tx_position DESC LIMIT 1`,
         { type: db.sequelize.QueryTypes.SELECT })
 
 
-        const latest_price_usd = parseFloat(response[0]?.price_after_eth) * parseFloat(currentAvaxPrice[0].price);
+        const latest_price_usd = parseFloat(response[0]?.price_after_eth) * parseFloat(response[0].avax_price);
 
         const volume = await getSumOfTotalBuyAndSell(db.sequelize, lpDeployedFalseTokens[i].internal_id)
 
