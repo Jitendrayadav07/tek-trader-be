@@ -23,6 +23,9 @@ router.get("/tokens-list-new",
     // JoiMiddleWare(tokenSchema.getTokenList, "query"),
     tokenController.tokenListTokensMerged);
 
+router.get("/arena-trade/get-change-percentage",
+    tokenController.getTradeChangePercentage);
+
 router.get("/my-holding-tokens",
     JoiMiddleWare(tokenSchema.myHoldingTokensSchema, "query"),
     tokenController.myHoldingTokens);
@@ -63,5 +66,6 @@ router.get("/wallet-holdings",
 router.get("/liquidity-status/:pair_address",
     JoiMiddleWare(tokenSchema.liquidityStatus, "params"),
     tokenController.liquidityStatus);
+
 
 module.exports = router;
