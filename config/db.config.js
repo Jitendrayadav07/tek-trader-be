@@ -38,6 +38,7 @@ db.ShillCategory = require("../models/ShillCategory")(sequelize, Sequelize);
 db.TokenMetadata = require("../models/TokenMetadata")(sequelize, Sequelize);
 db.ArenaPriceLive = require("../models/ArenaPriceLive")(sequelize, Sequelize);
 db.ArenaTradeTemp = require("../models/ArenaTradeTemp")(sequelize, Sequelize);
+db.UserWallet = require("../models/UserWallet")(sequelize, Sequelize);
 
 // Association
 // Tokens and Trades have one-to-many relationship

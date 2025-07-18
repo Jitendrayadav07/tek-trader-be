@@ -6,10 +6,12 @@ const router = express.Router();
 const shillCategoryRoutes = require("./shillCategoryRoutes");
 const shillBoardRoutes = require("./shillBoardRoutes");
 const tokenRoutes = require("./token");
+const userWalletRoutes = require("./userWalletRoutes")
 
 router.use("/shill_category",shillCategoryRoutes);
 router.use("/shill_board",shillBoardRoutes);
 router.use("/tokens",tokenRoutes);
+router.use("/user-wallet",userWalletRoutes)
 
 
 module.exports = router;
