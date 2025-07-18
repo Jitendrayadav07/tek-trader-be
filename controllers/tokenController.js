@@ -122,13 +122,15 @@ const recentTokens = async (req, res) => {
         });
 
         const latestTrade = tokenTrades[tokenTrades.length - 1] || null;
+
         const latest_trade_absolute_order = latestTrade?.absolute_tx_position || null;
 
         const latest_price_eth = latestTrade?.price_after_eth
           ? parseFloat(latestTrade.price_after_eth)
           : 0;
 
-        const latest_price_usd = latest_price_eth * latestTrade.avax_price;
+
+        const latest_price_usd = latest_price_eth * latestTrade?.avax_price;
 
         // 🟩 Sum of transferred AVAX
         const latest_total_volume_eth = tokenTrades.reduce(
