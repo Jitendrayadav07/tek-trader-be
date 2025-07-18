@@ -36,7 +36,16 @@ const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js.j
 const convertDexDataToCustomFormat = require('../utils/convertDexDataToProperFormat.js');
 const { isContractAddress } = require('../utils/checkContractAddress.js');
 const redisClient = require('../utils/redisClient.js');
+const { calculatePriceEtherForInitialTransaction, calculatePriceEtherForSubsequentTransactions } = require('../utils/calculatePriceEthNew.js');
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
+const {sumAmountByAction, getSupplyEth} = require('../utils/calculateMarketCap');
+
+/**
+ * Utility to sum token amounts by action type
+ * @param {Array} trades - Array of trade objects
+ * @param {string} action - Action type to filter (e.g., 'buy', 'sell', 'initial buy')
+ * @returns {bigint} Sum of amounts for the given action
+ */
 
 
 const ERC20_ABI = [
@@ -142,25 +151,20 @@ const recentTokens = async (req, res) => {
         });
 
         // 🟩 Calculate latest_supply_eth using BigInt
-        const initialBuyAmount = tokenTrades
-          .filter((t) => t.action === "initial buy")
-          .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
-
-        const totalBuyAmount = tokenTrades
-          .filter((t) => t.action === "buy")
-          .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
-
-        const totalSellAmount = tokenTrades
-          .filter((t) => t.action === "sell")
-          .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
-
-        const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
-        const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+        const initialBuyAmount = sumAmountByAction(tokenTrades, "initial buy");
+        const totalBuyAmount = sumAmountByAction(tokenTrades, "buy");
+        const totalSellAmount = sumAmountByAction(tokenTrades, "sell");
+        // const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
+        // // const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+        const latest_supply_eth = getSupplyEth(initialBuyAmount, totalBuyAmount, totalSellAmount)
+        
 
         const tokenMetadata = await db.TokenMetadata.findOne({
           where: { bc_group_id: token.internal_id },
         });
-
+        // latest_supply_eth: Number(latest_supply_eth.toFixed(6)),
+        // latest_price_usd: Number(latest_price_usd.toFixed(12)),
+        
         return {
           row_id: token.id,
           tokens: tokens.ip_deployed,
@@ -273,17 +277,11 @@ const pairTokenDataNew = async (req, res) => {
     );
 
     // 🟩 Calculate latest_supply_eth using BigInt
-    const initialBuyAmount = token_data
-      .filter((t) => t.action === "initial buy")
-      .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+    const initialBuyAmount = sumAmountByAction(token_data, "initial buy");
 
-    const totalBuyAmount = token_data
-      .filter((t) => t.action === "buy")
-      .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+    const totalBuyAmount = sumAmountByAction(token_data, "buy");
 
-    const totalSellAmount = token_data
-      .filter((t) => t.action === "sell")
-      .reduce((sum, t) => sum + BigInt(t.amount || "0"), 0n);
+    const totalSellAmount = sumAmountByAction(token_data, "sell");
 
     const latest_supply_wei = initialBuyAmount + totalBuyAmount - totalSellAmount;
     const latest_supply_eth = Number(latest_supply_wei) / 1e18;
@@ -1710,6 +1708,73 @@ const liquidityStatus = async(req,res) => {
   }
 }
 
+const getTradeChangePercentage = async (req, res) => {
+  try {
+    const { contract_address, time } = req.query;
+    if (!contract_address) {
+      return res.status(400).send(Response.sendResponse(false, null, "Missing contract_address parameter", 400));
+    }
+    // Support both hours (e.g., '24') and minutes (e.g., '5m')
+    let intervalStr = "24 hours";
+    if (time) {
+      if (typeof time === 'string' && time.endsWith('m')) {
+        const minutes = parseInt(time.slice(0, -1));
+        if (!isNaN(minutes) && minutes > 0) {
+          intervalStr = `${minutes} minutes`;
+        }
+      } else {
+        const hours = parseInt(time.slice(0, -1))
+        if (!isNaN(hours) && hours > 0) {
+          intervalStr = `${hours} hours`;
+        }
+      }
+    }
+
+    // Get token_id from contract_address (case-insensitive)
+    const tokenRow = await db.ArenaTradeCoins.findOne({
+      where: db.Sequelize.where(
+        db.Sequelize.fn('lower', db.Sequelize.col('contract_address')),
+        contract_address.toLowerCase()
+      ),
+      attributes: ['internal_id'],
+    });
+    if (!tokenRow) {
+      return res.status(404).send(Response.sendResponse(false, null, `No token found for contract_address: ${contract_address}`, 404));
+    }
+    const token_id = tokenRow.internal_id;
+
+    // Run the price change query (using price_eth)
+    const query = `
+      WITH price_data AS (
+        SELECT
+          token_id,
+          FIRST_VALUE(price_eth) OVER (PARTITION BY token_id ORDER BY timestamp ASC) AS old_price,
+          LAST_VALUE(price_eth) OVER (PARTITION BY token_id ORDER BY timestamp ASC
+                                      ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS new_price
+        FROM arena_trades
+        WHERE timestamp >= NOW() - INTERVAL '${intervalStr}'
+          AND price_eth IS NOT NULL AND token_id = :token_id AND status = 'success'
+      )
+      SELECT
+        token_id,
+        ROUND(((new_price - old_price) / NULLIF(old_price, 0)) * 100, 2) AS price_change_percent
+      FROM price_data
+      GROUP BY token_id, old_price, new_price
+      ORDER BY price_change_percent DESC;
+    `;
+    const result = await db.sequelize.query(query, {
+      replacements: { token_id },
+      type: db.Sequelize.QueryTypes.SELECT,
+    });
+    if (!result || result.length === 0) {
+      return res.status(200).send(Response.sendResponse(false, null, {token_id, price_change_percent: "0"}, 404));
+    }
+    return res.status(200).send(Response.sendResponse(true, result[0], null, 200));
+  } catch (err) {
+    console.error('Error in getTradeChangePercentage:', err);
+    return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
+  }
+}
 
 
 module.exports = {
@@ -1730,5 +1795,6 @@ module.exports = {
   tokenListTokensNew,
   tokenListArenaPro,
   tokenListTokensMerged,
-  liquidityStatus
+  liquidityStatus,
+  getTradeChangePercentage
 }
