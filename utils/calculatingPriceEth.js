@@ -78,4 +78,4 @@ function calculateFurtherTransactions(absolute_value, sum_of_total_supply) {
 
 
 
-module.exports = {  calculatePriceEtherForSubsequentTransactions };
+module.exports = {  calculatePriceEtherForSubsequentTransactions, getSumOfTotalBuyAndSell };
