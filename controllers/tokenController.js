@@ -36,7 +36,6 @@ const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js.j
 const convertDexDataToCustomFormat = require('../utils/convertDexDataToProperFormat.js');
 const { isContractAddress } = require('../utils/checkContractAddress.js');
 const redisClient = require('../utils/redisClient.js');
-const { calculatePriceEtherForInitialTransaction, calculatePriceEtherForSubsequentTransactions } = require('../utils/calculatePriceEthNew.js');
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
 const {sumAmountByAction, getSupplyEth} = require('../utils/calculateMarketCap');
 
