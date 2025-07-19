@@ -37,7 +37,7 @@ const convertDexDataToCustomFormat = require('../utils/convertDexDataToProperFor
 const { isContractAddress } = require('../utils/checkContractAddress.js');
 const redisClient = require('../utils/redisClient.js');
 const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
-const {sumAmountByAction, getSupplyEth} = require('../utils/calculateMarketCap');
+const { sumAmountByAction, getSupplyEth } = require('../utils/calculateMarketCap');
 const { getLastestAvaxPrice } = require('../services/getLatestAvaxPrice.js');
 const { getSumOfTotalBuyAndSell } = require('../utils/calculatingPriceEth.js');
 
@@ -155,14 +155,14 @@ const recentTokens = async (req, res) => {
         const totalBuyAmount = sumAmountByAction(tokenTrades, "buy");
         const totalSellAmount = sumAmountByAction(tokenTrades, "sell");
         const latest_supply_eth = getSupplyEth(initialBuyAmount, totalBuyAmount, totalSellAmount)
-        
+
 
         const tokenMetadata = await db.TokenMetadata.findOne({
           where: { bc_group_id: token.internal_id },
         });
         // latest_supply_eth: Number(latest_supply_eth.toFixed(6)),
         // latest_price_usd: Number(latest_price_usd.toFixed(12)),
-        
+
         return {
           row_id: token.id,
           tokens: tokens.ip_deployed,
@@ -293,7 +293,7 @@ const pairTokenDataNew = async (req, res) => {
     const totalSupply = 1e10;
 
     // latest_price_eth
-    const marketCap =  Number(latest_supply_eth.toFixed(6)) *  Number(priceUsd.toFixed(12)) 
+    const marketCap = Number(latest_supply_eth.toFixed(6)) * Number(priceUsd.toFixed(12))
 
     const fdv = marketCap;
 
@@ -465,12 +465,12 @@ const pairTokenDataNew = async (req, res) => {
 // here search would be the contract address
 const fetchDexScreenerData = async (search, from = null) => {
   let url = ''
-  if(from)
+  if (from)
     url = `https://api.dexscreener.com/latest/dex/search?q=`
-  else{
+  else {
     url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/ARENATRADE`;
   }
-  if(search) 
+  if (search)
     url = url + `/${search}`
 
   const response = await axiosInstance.get(url);
@@ -479,7 +479,7 @@ const fetchDexScreenerData = async (search, from = null) => {
 };
 
 const fetchMultipleTokensDexScreener = async (tokens) => {
-  const response = await axiosInstance.get(`https://api.dexscreener.com/tokens/v1/avalanche/`+tokens);
+  const response = await axiosInstance.get(`https://api.dexscreener.com/tokens/v1/avalanche/` + tokens);
   return response;
 }
 
@@ -491,23 +491,23 @@ const tokenListTokens = async (req, res) => {
 
       let _isContractAddress = await isContractAddress(search)
 
-      if(_isContractAddress) {
-              // Find token by contract address from arena-trade-coins
-      const tokenByContract = await db.sequelize.query(
-        `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
-        {
-          replacements: { contract_address: search },
-          type: db.Sequelize.QueryTypes.SELECT,
-        }
-      );
+      if (_isContractAddress) {
+        // Find token by contract address from arena-trade-coins
+        const tokenByContract = await db.sequelize.query(
+          `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
+          {
+            replacements: { contract_address: search },
+            type: db.Sequelize.QueryTypes.SELECT,
+          }
+        );
 
-      console.log("token", tokenByContract)
+        console.log("token", tokenByContract)
 
         if (tokenByContract.length > 0) {
           const token = tokenByContract[0];
-          
+
           // If lp_deployed is true, call DexScreener API
-          if (token.lp_deployed == true) {  
+          if (token.lp_deployed == true) {
             const avalanchePairs = await fetchDexScreenerData(search);
             formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
             // return res.status(200).send(Response.sendResponse(true, [formattedResponse[0]], null, 200));
@@ -538,47 +538,47 @@ const tokenListTokens = async (req, res) => {
                   ON c.contract_address = tm.contract_address
                     WHERE LOWER(c.contract_address) = LOWER(:contract_address)
                   LIMIT 5;`,
-                {
-                  replacements: { contract_address: `${search}` },
-                  type: db.Sequelize.QueryTypes.SELECT,
-                }
+              {
+                replacements: { contract_address: `${search}` },
+                type: db.Sequelize.QueryTypes.SELECT,
+              }
             );
             formattedResponse = dbTokensWithTrades
             //return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
           }
         }
       }
-      else{ 
-        if(search.length <= 2) {
+      else {
+        if (search.length <= 2) {
           const avalanchePairs = await fetchDexScreenerData(search);
           formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
           // return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
         }
         else {
-            // Query arena-trade-coins table for tokens matching the search
-            const dbTokens = await db.sequelize.query(
-              `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
-              {
-                replacements: { search: `${search}%` },
-                type: db.Sequelize.QueryTypes.SELECT,
-              }
-            );
-      
-            // Check if majority of tokens have lp_deployed as true or false
-            if (dbTokens.length > 0) {
-              const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
-              const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
-              
-              if (deployedCount > notDeployedCount) {
-                const avalanchePairs = await fetchDexScreenerData(search);
-                formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
-                // return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
-              } else {
-                console.log("Equal number of deployed and non-deployed tokens");
-                
-                // Query arena-trade-coins table with join from arena_trades
-                formattedResponse = await db.sequelize.query(
-                  `SELECT 
+          // Query arena-trade-coins table for tokens matching the search
+          const dbTokens = await db.sequelize.query(
+            `SELECT lp_deployed FROM "arena-trade-coins" WHERE name ILIKE :search OR symbol ILIKE :search ORDER BY lp_deployed DESC LIMIT 3`,
+            {
+              replacements: { search: `${search}%` },
+              type: db.Sequelize.QueryTypes.SELECT,
+            }
+          );
+
+          // Check if majority of tokens have lp_deployed as true or false
+          if (dbTokens.length > 0) {
+            const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
+            const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
+
+            if (deployedCount > notDeployedCount) {
+              const avalanchePairs = await fetchDexScreenerData(search);
+              formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
+              // return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
+            } else {
+              console.log("Equal number of deployed and non-deployed tokens");
+
+              // Query arena-trade-coins table with join from arena_trades
+              formattedResponse = await db.sequelize.query(
+                `SELECT 
                       c.internal_id,
                       c.name,
                       c.symbol,
@@ -604,19 +604,19 @@ const tokenListTokens = async (req, res) => {
                       (c.name ILIKE :search OR c.symbol ILIKE :search)
                   ORDER BY marketCap ASC
                   LIMIT 5;`,
-                  {
-                    replacements: { search: `${search}%` },
-                    type: db.Sequelize.QueryTypes.SELECT,
-                  }
-                );
-                
-                // return res.status(200).send(Response.sendResponse(true,  dbTokensWithTrades , null, 200));
-              }
-            } else {
-              console.log("No tokens found");
+                {
+                  replacements: { search: `${search}%` },
+                  type: db.Sequelize.QueryTypes.SELECT,
+                }
+              );
+
+              // return res.status(200).send(Response.sendResponse(true,  dbTokensWithTrades , null, 200));
             }
-      
-            // return res.status(200).send(Response.sendResponse(true, { tokens: dbTokens }, null, 200));
+          } else {
+            console.log("No tokens found");
+          }
+
+          // return res.status(200).send(Response.sendResponse(true, { tokens: dbTokens }, null, 200));
         }
       }
 
@@ -624,7 +624,7 @@ const tokenListTokens = async (req, res) => {
       const { data } = await axiosInstance.get(
         `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
         {
-          params: { 
+          params: {
             pageSize: 200,
             filterSpamTokens: true,
             currency: 'usd',
@@ -641,11 +641,11 @@ const tokenListTokens = async (req, res) => {
       const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
 
       if (tokenAddresses.length > 0) {
-        for(let i = 0; i < formattedResponse.length; i++) {
+        for (let i = 0; i < formattedResponse.length; i++) {
           let found = tokensWithBalance.find(el => el.address.toLowerCase() === formattedResponse[i]?.contract_address?.toLowerCase())
           // console.log("found", found)
           if (formattedResponse[i]) {
-            formattedResponse[i].balance =  formattedResponse[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0
+            formattedResponse[i].balance = formattedResponse[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0
           }
         }
         return res.status(200).send({ isSuccess: true, result: formattedResponse, message: null, statusCode: 200 });
@@ -653,7 +653,7 @@ const tokenListTokens = async (req, res) => {
 
     } else if (wallet_address) {
       // Fetch balance data from Glacier API
-      console.log("start" , new Date())
+      console.log("start", new Date())
       const { data } = await axiosInstance.get(
         `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
         {
@@ -667,7 +667,7 @@ const tokenListTokens = async (req, res) => {
           },
         }
       );
-      console.log("end" , new Date())
+      console.log("end", new Date())
 
 
       const erc20Balances = data.erc20TokenBalances;
@@ -679,7 +679,7 @@ const tokenListTokens = async (req, res) => {
       }
 
       // Fetch matching tokens from database to get lp_deployed status
-      console.log("start 2" , new Date())
+      console.log("start 2", new Date())
       const dbTokens = await db.sequelize.query(
         `
           SELECT name, symbol, contract_address, lp_deployed, pair_address
@@ -704,13 +704,13 @@ const tokenListTokens = async (req, res) => {
         const dexScreenerUrl = `https://api.dexscreener.com/tokens/v1/avalanche/${contractAddresses}`;
         try {
           const response = await axiosInstance.get(dexScreenerUrl);
-          processed_data.push(...convertDexDataToCustomFormat(response.data))    
+          processed_data.push(...convertDexDataToCustomFormat(response.data))
           // return res.status(200).send(Response.sendResponse(true, converted, null, 200));
         } catch (error) {
           console.error("DexScreener API error:", error.message);
         }
       }
-      if(lp_false_tokens.length > 0) {
+      if (lp_false_tokens.length > 0) {
         let lowerCaseTokens = lp_false_tokens.map(el => el.contract_address.toLowerCase())
         let query = `SELECT 
             c.internal_id,
@@ -747,30 +747,30 @@ const tokenListTokens = async (req, res) => {
         processed_data.push(...non_lp_data)
       }
 
-             // console.log("token", tokensWithBalance)
-       for(let i = 0; i < processed_data.length; i++) {
-         let found = tokensWithBalance.find(el => el.address.toLowerCase() === processed_data[i]?.contract_address?.toLowerCase())
-         // console.log("found", found)
-         if (processed_data[i]) {
-           processed_data[i].balance =  processed_data[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0
-         }
-       }
+      // console.log("token", tokensWithBalance)
+      for (let i = 0; i < processed_data.length; i++) {
+        let found = tokensWithBalance.find(el => el.address.toLowerCase() === processed_data[i]?.contract_address?.toLowerCase())
+        // console.log("found", found)
+        if (processed_data[i]) {
+          processed_data[i].balance = processed_data[i].balance = parseFloat(found?.balance) / 10 ** 18 || 0
+        }
+      }
 
 
       return res.status(200).send(Response.sendResponse(true, processed_data, null, 200));
-    }else if(search){
+    } else if (search) {
       const communities = await fetchStarsArenaCommunities(search);
       const response = formatCommunityData(communities);
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
-    }else {
-      const { page, pageSize} = req.query;
+    } else {
+      const { page, pageSize } = req.query;
       const communities = await StarsArenaTopCommunities(page, pageSize);
       const response = formatCommunityData(communities);
 
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
     }
   } catch (err) {
-    console.log("err",err)
+    console.log("err", err)
     return res.status(500).send(Response.sendResponse(false, null, 'Error occurred', 500));
   }
 };
@@ -788,7 +788,7 @@ const tokenListTokensNew = async (req, res) => {
     let _isContractAddress = await isContractAddress(search)
 
 
-    if(_isContractAddress) {
+    if (_isContractAddress) {
       // Find token by contract address from arena-trade-coins
       const tokenByContract = await db.sequelize.query(
         `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(contract_address) = LOWER(:contract_address)`,
@@ -802,9 +802,9 @@ const tokenListTokensNew = async (req, res) => {
 
       if (tokenByContract.length > 0) {
         const token = tokenByContract[0];
-        
+
         // If lp_deployed is true, call DexScreener API
-        if (token.lp_deployed == true) {  
+        if (token.lp_deployed == true) {
           const avalanchePairs = await fetchDexScreenerData(search);
           const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
           return res.status(200).send(Response.sendResponse(true, [formattedResponse[0]], null, 200));
@@ -835,10 +835,10 @@ const tokenListTokensNew = async (req, res) => {
                 ON c.contract_address = tm.contract_address
                   WHERE LOWER(c.contract_address) = LOWER(:contract_address)
                 LIMIT 5;`,
-              {
-                replacements: { contract_address: `${search}` },
-                type: db.Sequelize.QueryTypes.SELECT,
-              }
+            {
+              replacements: { contract_address: `${search}` },
+              type: db.Sequelize.QueryTypes.SELECT,
+            }
           );
           return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
         }
@@ -846,7 +846,7 @@ const tokenListTokensNew = async (req, res) => {
     }
 
     else {
-      if(search.length <= 2) {
+      if (search.length <= 2) {
         const start = Date.now();
         const avalanchePairs = await fetchDexScreenerData(search);
         const _end = Date.now();
@@ -863,19 +863,19 @@ const tokenListTokensNew = async (req, res) => {
             type: db.Sequelize.QueryTypes.SELECT,
           }
         );
-  
+
         // Check if majority of tokens have lp_deployed as true or false
         if (dbTokens.length > 0) {
           const deployedCount = dbTokens.filter(token => token.lp_deployed === true).length;
           const notDeployedCount = dbTokens.filter(token => token.lp_deployed === false).length;
-          
+
           if (deployedCount > notDeployedCount) {
             const avalanchePairs = await fetchDexScreenerData(search);
             const formattedResponse = convertDexDataToCustomFormat(avalanchePairs);
             return res.status(200).send(Response.sendResponse(true, formattedResponse, null, 200));
           } else {
             console.log("Equal number of deployed and non-deployed tokens");
-            
+
             // Query arena-trade-coins table with join from arena_trades
             const dbTokensWithTrades = await db.sequelize.query(
               `SELECT 
@@ -909,13 +909,13 @@ const tokenListTokensNew = async (req, res) => {
                 type: db.Sequelize.QueryTypes.SELECT,
               }
             );
-            
-            return res.status(200).send(Response.sendResponse(true,  dbTokensWithTrades , null, 200));
+
+            return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
           }
         } else {
           console.log("No tokens found");
         }
-  
+
         // return res.status(200).send(Response.sendResponse(true, { tokens: dbTokens }, null, 200));
       }
     }
@@ -930,6 +930,7 @@ const tokenListTokensMerged = async (req, res) => {
     let { search, wallet_address } = req.query;
 
     const _isContractAddress = await isContractAddress(search);
+    console.log({ _isContractAddress })
 
     // 🔹 If search is a contract address
     if (_isContractAddress) {
@@ -960,72 +961,129 @@ const tokenListTokensMerged = async (req, res) => {
             return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           }
         } else {
-          let query = `
-          SELECT 
-          atc.pair_address, 
-          atc.contract_address, 
-          atc.supply, 
-          atc.internal_id, 
-          atc.lp_deployed, 
-          atc.name,
-          atc.symbol,
-          
-          -- Add photo_url from token_metadata
-          tm.photo_url,
+          console.log("here....")
+          //     let query = `
+          //     SELECT 
+          //     atc.pair_address, 
+          //     atc.contract_address, 
+          //     atc.supply, 
+          //     atc.internal_id, 
+          //     atc.lp_deployed, 
+          //     atc.name,
+          //     atc.symbol,
 
-          -- Supply calculation in WEI
-          SUM(CASE WHEN at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) +
-          SUM(CASE WHEN at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) -
-          SUM(CASE WHEN at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) AS latest_supply_wei,
+          //     -- Add photo_url from token_metadata
+          //     tm.photo_url,
 
-          -- Latest price_after_usd from most recent trade
-          (
-            SELECT at2.price_after_usd
-            FROM arena_trades at2
-            WHERE at2.token_id = at.token_id AND at2.status = 'success'
-            ORDER BY at2.timestamp DESC
-            LIMIT 1
-          ) AS latest_price_usd,
+          //     -- Supply calculation in WEI
+          //     SUM(CASE WHEN at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) +
+          //     SUM(CASE WHEN at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) -
+          //     SUM(CASE WHEN at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) AS latest_supply_wei,
 
-          -- MarketCap = supply in ETH * latest USD price
-          (
-            (
-              SUM(CASE WHEN at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) +
-              SUM(CASE WHEN at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) -
-              SUM(CASE WHEN at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END)
-            ) / 1e18
-          ) *
-          (
-            SELECT at2.price_after_usd
-            FROM arena_trades at2
-            WHERE at2.token_id = at.token_id AND at2.status = 'success'
-            ORDER BY at2.timestamp DESC
-            LIMIT 1
-          ) AS marketcap
+          //     -- Latest price_after_usd from most recent trade
+          //     (
+          //       SELECT at2.price_after_usd
+          //       FROM arena_trades at2
+          //       WHERE at2.token_id = at.token_id AND at2.status = 'success'
+          //       ORDER BY at2.timestamp DESC
+          //       LIMIT 1
+          //     ) AS latest_price_usd,
 
-      FROM arena_trades at
-      LEFT JOIN "arena-trade-coins" atc ON at.token_id = atc.internal_id
-      LEFT JOIN token_metadata tm ON atc.contract_address = tm.contract_address  -- Join added for photo_url
-      WHERE LOWER(atc.contract_address) = LOWER(:contract_address) AND at.status = 'success'
-      GROUP BY 
-          atc.pair_address, 
-          atc.contract_address, 
-          atc.supply, 
-          at.token_id, 
-          atc.internal_id, 
-          atc.lp_deployed, 
-          atc.name, 
-          atc.symbol, 
-          tm.photo_url;  -- Include in GROUP BY
-          `
-          
-          const dbTokensWithTrades = await db.sequelize.query(  
+          //     -- MarketCap = supply in ETH * latest USD price
+          //     (
+          //       (
+          //         SUM(CASE WHEN at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) +
+          //         SUM(CASE WHEN at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END) -
+          //         SUM(CASE WHEN at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END)
+          //       ) / 1e18
+          //     ) *
+          //     (
+          //       SELECT at2.price_after_usd
+          //       FROM arena_trades at2
+          //       WHERE at2.token_id = at.token_id AND at2.status = 'success'
+          //       ORDER BY at2.timestamp DESC
+          //       LIMIT 1
+          //     ) AS marketcap
+
+          // FROM arena_trades at
+          // LEFT JOIN "arena-trade-coins" atc ON at.token_id = atc.internal_id
+          // LEFT JOIN token_metadata tm ON atc.contract_address = tm.contract_address  -- Join added for photo_url
+          // WHERE LOWER(atc.contract_address) = LOWER(:contract_address) AND at.status = 'success'
+          // GROUP BY 
+          //     atc.pair_address, 
+          //     atc.contract_address, 
+          //     atc.supply, 
+          //     at.token_id, 
+          //     atc.internal_id, 
+          //     atc.lp_deployed, 
+          //     atc.name, 
+          //     atc.symbol, 
+          //     tm.photo_url;  -- Include in GROUP BY
+          //     `
+
+          let query = `SELECT 
+  atc.pair_address, 
+  atc.contract_address, 
+  atc.supply, 
+  atc.internal_id, 
+  atc.lp_deployed, 
+  atc.name,
+  atc.symbol,
+  tm.photo_url,
+
+  -- Supply calculation in WEI
+  COALESCE(SUM(CASE WHEN at.status = 'success' AND at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END), 0) +
+  COALESCE(SUM(CASE WHEN at.status = 'success' AND at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END), 0) -
+  COALESCE(SUM(CASE WHEN at.status = 'success' AND at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END), 0) AS latest_supply_wei,
+
+  -- Latest price_after_usd from successful trades (nullable)
+  (
+    SELECT at2.price_after_usd
+    FROM arena_trades at2
+    WHERE at2.token_id = atc.internal_id AND at2.status = 'success'
+    ORDER BY at2.timestamp DESC
+    LIMIT 1
+  ) AS latest_price_usd,
+
+  -- MarketCap = supply in ETH * latest USD price
+  (
+    (
+      COALESCE(SUM(CASE WHEN at.status = 'success' AND at.action = 'initial buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END), 0) +
+      COALESCE(SUM(CASE WHEN at.status = 'success' AND at.action = 'buy' THEN CAST(at.amount AS NUMERIC) ELSE 0 END), 0) -
+      COALESCE(SUM(CASE WHEN at.status = 'success' AND at.action = 'sell' THEN CAST(at.amount AS NUMERIC) ELSE 0 END), 0)
+    ) / 1e18
+  ) *
+  (
+    SELECT at2.price_after_usd
+    FROM arena_trades at2
+    WHERE at2.token_id = atc.internal_id AND at2.status = 'success'
+    ORDER BY at2.timestamp DESC
+    LIMIT 1
+  ) AS marketcap
+
+FROM "arena-trade-coins" atc
+LEFT JOIN arena_trades at ON at.token_id = atc.internal_id  -- Allow tokens with no trades
+LEFT JOIN token_metadata tm ON atc.contract_address = tm.contract_address
+WHERE LOWER(atc.contract_address) = LOWER(:contract_address)
+GROUP BY 
+  atc.pair_address, 
+  atc.contract_address, 
+  atc.supply, 
+  atc.internal_id, 
+  atc.lp_deployed, 
+  atc.name, 
+  atc.symbol, 
+  tm.photo_url;
+`
+
+          const dbTokensWithTrades = await db.sequelize.query(
             query,
             {
               replacements: { contract_address: search },
               type: db.Sequelize.QueryTypes.SELECT,
             }
           );
+          console.log({ dbTokensWithTrades })
           return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
         }
       }
@@ -1041,9 +1099,9 @@ const tokenListTokensMerged = async (req, res) => {
       const isTekCached = await redisClient.get(cachedTekToken)
       let formattedResponse;
       let tekResponse;
-      if(isTekCached) {
+      if (isTekCached) {
         tekResponse = JSON.parse(isTekCached)
-      }else{  
+      } else {
 
         const avalanchePairs = await fetchDexScreenerData(tekSearchContractAddress, 'tek');
         tekResponse = convertDexDataToCustomFormat(avalanchePairs);
@@ -1060,7 +1118,7 @@ const tokenListTokensMerged = async (req, res) => {
         await redisClient.set(cacheKey, JSON.stringify(formattedResponse), { EX: 3600 });
       }
 
-      return res.status(200).send(Response.sendResponse(true, [...tekResponse,...formattedResponse], null, 200));
+      return res.status(200).send(Response.sendResponse(true, [...tekResponse, ...formattedResponse], null, 200));
     }
 
     // 🔹 If search is short (e.g., symbol like "usdt")
@@ -1120,7 +1178,7 @@ const tokenListTokensMerged = async (req, res) => {
       const lpDeployedTrueTokens = dbTokens.filter(el => el.lp_deployed);
       const lpDeployedFalseTokens = dbTokens.filter(el => !el.lp_deployed);
       let multipleTokensFormattedResponse = [];
-      if(lpDeployedTrueTokens.length) {
+      if (lpDeployedTrueTokens.length) {
         const tokenContractAddresses = lpDeployedTrueTokens.map(token => token.contract_address).join(',')
         let multipleTokensResponse = await fetchMultipleTokensDexScreener(tokenContractAddresses)
         multipleTokensFormattedResponse = convertDexDataToCustomFormat(multipleTokensResponse.data);
@@ -1130,9 +1188,9 @@ const tokenListTokensMerged = async (req, res) => {
       const currentAvaxPrice = await getLastestAvaxPrice();
 
 
-      for(let i = 0; i < lpDeployedFalseTokens.length; i++) {
+      for (let i = 0; i < lpDeployedFalseTokens.length; i++) {
         const response = await db.sequelize.query(`SELECT price_after_eth,avax_price from public.arena_trades where token_id = ${lpDeployedFalseTokens[i].internal_id} order by timestamp DESC, absolute_tx_position DESC LIMIT 1`,
-        { type: db.sequelize.QueryTypes.SELECT })
+          { type: db.sequelize.QueryTypes.SELECT })
 
 
         const latest_price_usd = parseFloat(response[0]?.price_after_eth) * parseFloat(response[0].avax_price);
@@ -1140,7 +1198,7 @@ const tokenListTokensMerged = async (req, res) => {
         const volume = await getSumOfTotalBuyAndSell(db.sequelize, lpDeployedFalseTokens[i].internal_id)
 
 
-        if(((volume[0].total_buy - volume[0].total_sell) == 0 || volume[0].total_buy - volume[0].total_sell < 0) && volume[0].total_sell != 0) {
+        if (((volume[0].total_buy - volume[0].total_sell) == 0 || volume[0].total_buy - volume[0].total_sell < 0) && volume[0].total_sell != 0) {
           console.log("token is thoop")
           lpDeployedFalseTokens[i].marketcap = '0'
           continue;
@@ -1150,14 +1208,14 @@ const tokenListTokensMerged = async (req, res) => {
         const latest_supply_eth = Number(latest_supply_wei) / 1e18;
 
 
-        lpDeployedFalseTokens[i].latest_price_usd =  Number(latest_price_usd.toFixed(12));
-        lpDeployedFalseTokens[i].latest_supply_eth =  Number(latest_supply_eth.toFixed(6));
+        lpDeployedFalseTokens[i].latest_price_usd = Number(latest_price_usd.toFixed(12));
+        lpDeployedFalseTokens[i].latest_supply_eth = Number(latest_supply_eth.toFixed(6));
         // took Frontend formula
-        lpDeployedFalseTokens[i].marketcap =  Number(latest_supply_eth.toFixed(6)) *  Number(latest_price_usd.toFixed(12)) 
+        lpDeployedFalseTokens[i].marketcap = Number(latest_supply_eth.toFixed(6)) * Number(latest_price_usd.toFixed(12))
 
       }
 
-      let sorted = [...multipleTokensFormattedResponse,...lpDeployedFalseTokens].sort((a,b) => b.marketcap - a.marketcap)
+      let sorted = [...multipleTokensFormattedResponse, ...lpDeployedFalseTokens].sort((a, b) => b.marketcap - a.marketcap)
 
 
       return res.status(200).send(Response.sendResponse(true, sorted, null, 200));
@@ -1176,18 +1234,18 @@ const tokenListTokensMerged = async (req, res) => {
 const tokenListArenaPro = async (req, res) => {
   try {
     const { q } = req.query;
-    
+
     if (!q) {
       return res.status(400).send(Response.sendResponse(false, null, "Search query 'q' is required", 400));
     }
 
     const url = `https://api.arenapro.io/tokens_view?or=(creator_twitter_handle.ilike.*${q}*,creator_address.ilike.*${q}*,token_contract_address.ilike.*${q}*,token_name.ilike.*${q}*,token_symbol.ilike.*${q}*)&order=latest_price_usd.desc&limit=20`;
-    
+
     const response = await axios.get(url);
-    
+
     // Filter tokens where a > 0
     const filteredData = response.data.filter(token => token.a > 0);
-    
+
     return res.status(200).send(Response.sendResponse(true, filteredData, null, 200));
   } catch (err) {
     console.error("Error in tokenListArenaPro:", err);
@@ -1200,13 +1258,13 @@ const communitiesListOfTokenController = async (req, res) => {
     const { search } = req.query;
 
     if (!search) {
-      return res.status(400).send({isSuccess: false,result: null,message: "Missing search query parameter",statusCode: 400});
+      return res.status(400).send({ isSuccess: false, result: null, message: "Missing search query parameter", statusCode: 400 });
     }
 
     const communities = await fetchStarsArenaCommunities(search);
     const response = formatCommunityData(communities);
 
-    return res.status(200).send({isSuccess: true,result: response,message: null,statusCode: 200});
+    return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
     // Step 2: Get token list
     // const token_details = await db.sequelize.query(
     //   `SELECT atc.contract_address, atc.id, atc.lp_deployed, atc.symbol, atc.lp_deployed, atc.pair_address, atc.name, atc.internal_id, atc.system_created, tm.photo_url AS photo_url
@@ -1475,7 +1533,7 @@ const transactionBuySellHistory = async (req, res) => {
     const { pair_address } = req.params;
     const limit = Number(req.query.limit) || 10;
     const offset = Number(req.query.offset) || 0;
-        
+
     if (!pair_address) {
       return res.status(400).send(
         Response.sendResponse(false, null, "Pair address is required", 400)
@@ -1643,10 +1701,10 @@ const tokenOhlcData = async (req, res) => {
 
 const communitiesTopController = async (req, res) => {
   try {
-    const { page, pageSize} = req.query;
+    const { page, pageSize } = req.query;
     const communities = await StarsArenaTopCommunities(page, pageSize);
     const response = formatCommunityData(communities);
-    return res.status(200).send({isSuccess: true,result: response,message: null,statusCode: 200});
+    return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
   } catch (err) {
     return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
   }
@@ -1770,8 +1828,8 @@ const walletHoldings = async (req, res) => {
   }
 };
 
-const liquidityStatus = async(req,res) => {
-  try{
+const liquidityStatus = async (req, res) => {
+  try {
     let { pair_address } = req.params;
     const response = await db.sequelize.query(
       `SELECT lp_deployed FROM "arena-trade-coins" WHERE LOWER(pair_address) = LOWER(:pair_address)`,
@@ -1781,7 +1839,7 @@ const liquidityStatus = async(req,res) => {
       }
     );
     return res.status(200).send(Response.sendResponse(true, response, null, 200));
-  }catch(err){
+  } catch (err) {
     return res.status(500).send(Response.sendResponse(false, null, "Error occurred", 500));
   }
 }
@@ -1845,7 +1903,7 @@ const getTradeChangePercentage = async (req, res) => {
       type: db.Sequelize.QueryTypes.SELECT,
     });
     if (!result || result.length === 0) {
-      return res.status(200).send(Response.sendResponse(false, null, {token_id, price_change_percent: "0"}, 404));
+      return res.status(200).send(Response.sendResponse(false, null, { token_id, price_change_percent: "0" }, 404));
     }
     return res.status(200).send(Response.sendResponse(true, result[0], null, 200));
   } catch (err) {
