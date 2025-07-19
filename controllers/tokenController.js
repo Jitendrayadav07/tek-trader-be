@@ -930,7 +930,6 @@ const tokenListTokensMerged = async (req, res) => {
     let { search, wallet_address } = req.query;
 
     const _isContractAddress = await isContractAddress(search);
-    console.log({ _isContractAddress })
 
     // 🔹 If search is a contract address
     if (_isContractAddress) {
@@ -961,7 +960,6 @@ const tokenListTokensMerged = async (req, res) => {
             return res.status(200).send(Response.sendResponse(true, [formatted[0]], null, 200));
           }
         } else {
-          console.log("here....")
           //     let query = `
           //     SELECT 
           //     atc.pair_address, 
@@ -1083,7 +1081,6 @@ GROUP BY
               type: db.Sequelize.QueryTypes.SELECT,
             }
           );
-          console.log({ dbTokensWithTrades })
           return res.status(200).send(Response.sendResponse(true, dbTokensWithTrades, null, 200));
         }
       }
@@ -1164,7 +1161,6 @@ GROUP BY
         LIMIT 10;
     `
 
-
     // 🔹 Name or symbol match from DB
     const dbTokens = await db.sequelize.query(
       query,
@@ -1187,32 +1183,72 @@ GROUP BY
       // here the logic for the no lptokens
       const currentAvaxPrice = await getLastestAvaxPrice();
 
+      //Neels Previous code commented
+      
+      // for (let i = 0; i < lpDeployedFalseTokens.length; i++) {
+      //   const response = await db.sequelize.query(`SELECT price_after_eth,avax_price from public.arena_trades where token_id = ${lpDeployedFalseTokens[i].internal_id} order by timestamp DESC, absolute_tx_position DESC LIMIT 1`,
+      //     { type: db.sequelize.QueryTypes.SELECT })
+
+
+      //   const latest_price_usd = parseFloat(response[0]?.price_after_eth) * parseFloat(response[0].avax_price);
+
+      //   const volume = await getSumOfTotalBuyAndSell(db.sequelize, lpDeployedFalseTokens[i].internal_id)
+
+
+      //   if (((volume[0].total_buy - volume[0].total_sell) == 0 || volume[0].total_buy - volume[0].total_sell < 0) && volume[0].total_sell != 0) {
+      //     console.log("token is thoop")
+      //     lpDeployedFalseTokens[i].marketcap = '0'
+      //     continue;
+      //   }
+
+      //   const latest_supply_wei = volume[0].total_buy - volume[0].total_sell;
+      //   const latest_supply_eth = Number(latest_supply_wei) / 1e18;
+
+
+      //   lpDeployedFalseTokens[i].latest_price_usd = Number(latest_price_usd.toFixed(12));
+      //   lpDeployedFalseTokens[i].latest_supply_eth = Number(latest_supply_eth.toFixed(6));
+      //   // took Frontend formula
+      //   lpDeployedFalseTokens[i].marketcap = Number(latest_supply_eth.toFixed(6)) * Number(latest_price_usd.toFixed(12))
+
+      // }
 
       for (let i = 0; i < lpDeployedFalseTokens.length; i++) {
-        const response = await db.sequelize.query(`SELECT price_after_eth,avax_price from public.arena_trades where token_id = ${lpDeployedFalseTokens[i].internal_id} order by timestamp DESC, absolute_tx_position DESC LIMIT 1`,
-          { type: db.sequelize.QueryTypes.SELECT })
-
-
-        const latest_price_usd = parseFloat(response[0]?.price_after_eth) * parseFloat(response[0].avax_price);
-
-        const volume = await getSumOfTotalBuyAndSell(db.sequelize, lpDeployedFalseTokens[i].internal_id)
-
-
-        if (((volume[0].total_buy - volume[0].total_sell) == 0 || volume[0].total_buy - volume[0].total_sell < 0) && volume[0].total_sell != 0) {
-          console.log("token is thoop")
-          lpDeployedFalseTokens[i].marketcap = '0'
+        // 1. Safe query with COALESCE fallback to 0
+        const response = await db.sequelize.query(
+          `SELECT 
+             COALESCE(price_after_eth, 0) AS price_after_eth, 
+             COALESCE(avax_price, 0) AS avax_price
+           FROM public.arena_trades 
+           WHERE token_id = ${lpDeployedFalseTokens[i].internal_id} 
+           ORDER BY timestamp DESC, absolute_tx_position DESC 
+           LIMIT 1`,
+          { type: db.sequelize.QueryTypes.SELECT }
+        );
+      
+        // 2. Fallback to 0 if no trades found
+        const price_after_eth = parseFloat(response[0]?.price_after_eth || 0);
+        const avax_price = parseFloat(response[0]?.avax_price || 0);
+        const latest_price_usd = price_after_eth * avax_price;
+      
+        // 3. Get volume
+        const volume = await getSumOfTotalBuyAndSell(db.sequelize, lpDeployedFalseTokens[i].internal_id);
+      
+        const total_buy = parseFloat(volume[0]?.total_buy || 0);
+        const total_sell = parseFloat(volume[0]?.total_sell || 0);
+      
+        if ((total_buy - total_sell <= 0) && total_sell !== 0) {
+          console.log("token is thoop");
+          lpDeployedFalseTokens[i].marketcap = '0';
           continue;
         }
-
-        const latest_supply_wei = volume[0].total_buy - volume[0].total_sell;
-        const latest_supply_eth = Number(latest_supply_wei) / 1e18;
-
-
+      
+        // 4. Calculate supply and marketcap
+        const latest_supply_wei = total_buy - total_sell;
+        const latest_supply_eth = latest_supply_wei / 1e18;
+      
         lpDeployedFalseTokens[i].latest_price_usd = Number(latest_price_usd.toFixed(12));
         lpDeployedFalseTokens[i].latest_supply_eth = Number(latest_supply_eth.toFixed(6));
-        // took Frontend formula
-        lpDeployedFalseTokens[i].marketcap = Number(latest_supply_eth.toFixed(6)) * Number(latest_price_usd.toFixed(12))
-
+        lpDeployedFalseTokens[i].marketcap = Number(latest_supply_eth.toFixed(6)) * Number(latest_price_usd.toFixed(12));
       }
 
       let sorted = [...multipleTokensFormattedResponse, ...lpDeployedFalseTokens].sort((a, b) => b.marketcap - a.marketcap)
