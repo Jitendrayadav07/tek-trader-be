@@ -1797,7 +1797,7 @@ const walletHoldings = async (req, res) => {
       `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
       {
         params: {
-          pageSize: 500,
+          pageSize: 20,
           filterSpamTokens: true,
           currency: 'usd',
         },
