@@ -8,9 +8,13 @@ const connectWallet = async (req, res) => {
     // Check if the wallet already exists
     const existingWallet = await db.UserWallet.findOne({ where: { wallet_address } });
     if (existingWallet) {
-      return res.status(400).send({
-        isSuccess: false,
-        message: 'Wallet already connected',
+      existingWallet.user_name = user_name;
+      await existingWallet.save();
+
+      return res.status(200).send({
+        isSuccess: true,
+        message: 'Wallet username updated successfully',
+        data: existingWallet,
       });
     }
 
