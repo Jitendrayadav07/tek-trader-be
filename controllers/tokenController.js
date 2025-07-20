@@ -1,4 +1,11 @@
 const axios = require('axios');
+const { AvaCloudSDK } = require("@avalabs/avacloud-sdk");
+
+const avaCloudSDK = new AvaCloudSDK({
+  serverURL: "https://api.avacloud.io/api/v1",
+  chainId: "43114",
+  accessToken: process.env.AVACLOUD_API_KEY,
+});
 
 // Create axios instance with keep-alive configuration
 const axiosInstance = axios.create({
@@ -1867,6 +1874,96 @@ const getAllTokenBalance = async (req, res) => {
 
 
 //Api using caching
+// const walletHoldings = async (req, res) => {
+//   try {
+//     const { wallet_address } = req.query;
+//     if (!wallet_address) {
+//       return res.status(400).send(Response.sendResponse(false, null, 'Missing wallet address', 400));
+//     }
+
+//     const cacheKey = `wallet_holdings_${wallet_address.toLowerCase()}`;
+
+//     // 🔍 Step 1: Check cache
+//     const cached = await redisClient.get(cacheKey);
+//     if (cached) {
+//       console.log('📦 Serving from cache');
+//       return res.status(200).send(Response.sendResponse(true, JSON.parse(cached), null, 200));
+//     }
+
+//     // 🌐 Step 2: Call Glacier API
+//     const { data } = await axios.get(
+//       `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
+//       {
+//         params: {
+//           pageSize: 500,
+//           filterSpamTokens: true,
+//           currency: 'usd',
+//         },
+//         headers: {
+//           accept: 'application/json',
+//         },
+//       }
+//     );
+
+//     const erc20Balances = data.erc20TokenBalances || [];
+
+//     // Filter tokens with balance > 1n
+//     const tokensWithBalance = erc20Balances.filter(t => {
+//       return t.balance && BigInt(t.balance) > 1n;
+//     });
+
+//     const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
+
+//     if (tokenAddresses.length === 0) {
+//       await redisClient.set(cacheKey, JSON.stringify([]), 'EX', 120); // cache empty list for 2 minutes
+//       return res.status(200).send(Response.sendResponse(true, [], null, 200));
+//     }
+
+//     const dbTokens = await db.sequelize.query(
+//       `
+//       SELECT name, symbol, contract_address, lp_deployed
+//       FROM "arena-trade-coins"
+//       WHERE LOWER(contract_address) IN (:addresses)
+//       `,
+//       {
+//         replacements: { addresses: tokenAddresses },
+//         type: db.Sequelize.QueryTypes.SELECT,
+//       }
+//     );
+
+//     const dbTokenMap = new Map(
+//       dbTokens.map(t => [t.contract_address.toLowerCase(), t])
+//     );
+
+//     const finalList = tokensWithBalance
+//       .map(t => {
+//         const match = dbTokenMap.get(t.address.toLowerCase());
+//         if (!match) return null;
+
+//         const balance = parseFloat(t.balance) / 10 ** t.decimals;
+//         if (balance < 1) return null;
+
+//         return {
+//           name: match.name || t.name,
+//           symbol: match.symbol || t.symbol,
+//           lp_deployed: match.lp_deployed || false,
+//           contract_address: t.address,
+//           balance,
+//           logo: t.logoUri || null,
+//         };
+//       })
+//       .filter(Boolean);
+
+//     // 💾 Step 3: Cache result for 2 minutes
+//     await redisClient.set(cacheKey, JSON.stringify(finalList), 'EX', 120);
+
+//     return res.status(200).send(Response.sendResponse(true, finalList, null, 200));
+//   } catch (err) {
+//     console.error('❌ Error in walletHoldings:', err.message);
+//     return res.status(500).send(Response.sendResponse(false, null, 'Error fetching wallet holdings', 500));
+//   }
+// };
+
 const walletHoldings = async (req, res) => {
   try {
     const { wallet_address } = req.query;
@@ -1875,32 +1972,22 @@ const walletHoldings = async (req, res) => {
     }
 
     const cacheKey = `wallet_holdings_${wallet_address.toLowerCase()}`;
-
-    // 🔍 Step 1: Check cache
     const cached = await redisClient.get(cacheKey);
     if (cached) {
-      console.log('📦 Serving from cache');
+      console.log("📦 Serving from Redis");
       return res.status(200).send(Response.sendResponse(true, JSON.parse(cached), null, 200));
     }
 
-    // 🌐 Step 2: Call Glacier API
-    const { data } = await axios.get(
-      `https://glacier-api.avax.network/v1/chains/43114/addresses/${wallet_address}/balances:listErc20`,
-      {
-        params: {
-          pageSize: 500,
-          filterSpamTokens: true,
-          currency: 'usd',
-        },
-        headers: {
-          accept: 'application/json',
-        },
-      }
-    );
+    // Step 1: Fetch from AvaCloud SDK
+    const result = await avaCloudSDK.data.evm.address.balances.listErc20({
+      address: wallet_address,
+      pageSize: 100,
+      filterSpamTokens: true,
+      currency: "usd",
+    });
 
-    const erc20Balances = data.erc20TokenBalances || [];
+    const erc20Balances = result?.result?.erc20TokenBalances || [];
 
-    // Filter tokens with balance > 1n
     const tokensWithBalance = erc20Balances.filter(t => {
       return t.balance && BigInt(t.balance) > 1n;
     });
@@ -1908,10 +1995,11 @@ const walletHoldings = async (req, res) => {
     const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
 
     if (tokenAddresses.length === 0) {
-      await redisClient.set(cacheKey, JSON.stringify([]), 'EX', 120); // cache empty list for 2 minutes
+      await redisClient.set(cacheKey, JSON.stringify([]), 'EX', 120);
       return res.status(200).send(Response.sendResponse(true, [], null, 200));
     }
 
+    // Step 2: Match tokens in your DB
     const dbTokens = await db.sequelize.query(
       `
       SELECT name, symbol, contract_address, lp_deployed
@@ -1928,6 +2016,7 @@ const walletHoldings = async (req, res) => {
       dbTokens.map(t => [t.contract_address.toLowerCase(), t])
     );
 
+    // Step 3: Merge + filter tokens with human balance >= 1
     const finalList = tokensWithBalance
       .map(t => {
         const match = dbTokenMap.get(t.address.toLowerCase());
@@ -1947,12 +2036,11 @@ const walletHoldings = async (req, res) => {
       })
       .filter(Boolean);
 
-    // 💾 Step 3: Cache result for 2 minutes
     await redisClient.set(cacheKey, JSON.stringify(finalList), 'EX', 120);
 
     return res.status(200).send(Response.sendResponse(true, finalList, null, 200));
   } catch (err) {
-    console.error('❌ Error in walletHoldings:', err.message);
+    console.error("❌ Error in walletHoldings:", err.message);
     return res.status(500).send(Response.sendResponse(false, null, 'Error fetching wallet holdings', 500));
   }
 };
