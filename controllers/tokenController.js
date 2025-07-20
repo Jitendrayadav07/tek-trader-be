@@ -423,6 +423,8 @@ const pairTokenDataNew = async (req, res) => {
       isSuccess: true,
       result: {
         token: "prebonded",
+        creator_address: token.creator_address,
+        creator_twitter_handle: tokenMetadata?.owner_twitter_handle === 'burakarenqa' ? null : tokenMetadata?.owner_twitter_handle,
         lp_deployed: token.lp_deployed,
         chainId: "avalanche",
         dexId: "arenatrade",
