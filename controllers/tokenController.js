@@ -1483,7 +1483,7 @@ const holdersTokens = async (req, res) => {
         .send(Response.sendResponse(false, null, "Pair_address is required", 400));
     }
 
-    const cacheKey = `holders_tokens_${pair_address.toLowerCase()}_${limit || 0}_${offset || 0}`;
+    const cacheKey = `holders_tokens_${pair_address.toLowerCase()}_${limit}_${offset}`;
 
     const cached = await redisClient.get(cacheKey);
     if (cached) {
