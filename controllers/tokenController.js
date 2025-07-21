@@ -1859,82 +1859,95 @@ const getAllTokenBalance = async (req, res) => {
 //   }
 // };
 
+async function setWalletBalanceCache(wallet_address,cacheKey) {
+  // Step 1: Fetch from AvaCloud SDK
+  const result = await avaCloudSDK.data.evm.address.balances.listErc20({
+    address: wallet_address,
+    pageSize: 500,
+    filterSpamTokens: false,
+    currency: "usd",
+  });
+
+  const erc20Balances = result?.result?.erc20TokenBalances || [];
+
+  const tokensWithBalance = erc20Balances.filter(t => {
+    return t.balance && BigInt(t.balance) > 1n;
+  });
+
+  const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
+
+  if (tokenAddresses.length === 0) {
+    await redisClient.set(cacheKey, JSON.stringify([]), 'EX', 120);
+    return res.status(200).send(Response.sendResponse(true, [], null, 200));
+  }
+
+  // Step 2: Match tokens in your DB
+  const dbTokens = await db.sequelize.query(
+    `
+    SELECT name, symbol, contract_address, lp_deployed
+    FROM "arena-trade-coins"
+    WHERE LOWER(contract_address) IN (:addresses)
+    `,
+    {
+      replacements: { addresses: tokenAddresses },
+      type: db.Sequelize.QueryTypes.SELECT,
+    }
+  );
+
+  const dbTokenMap = new Map(
+    dbTokens.map(t => [t.contract_address.toLowerCase(), t])
+  );
+
+  // Step 3: Merge + filter tokens with human balance >= 1
+  const finalList = tokensWithBalance
+    .map(t => {
+      const match = dbTokenMap.get(t.address.toLowerCase());
+      if (!match) return null;
+
+      const balance = parseFloat(t.balance) / 10 ** t.decimals;
+      if (balance < 1) return null;
+
+      return {
+        name: match.name || t.name,
+        symbol: match.symbol || t.symbol,
+        lp_deployed: match.lp_deployed || false,
+        contract_address: t.address,
+        balance,
+        logo: t.logoUri || null,
+      };
+    })
+    .filter(Boolean);
+
+    await redisClient.set(cacheKey, JSON.stringify(finalList), {
+      EX: 120,
+    });
+
+    return finalList;
+}
+
 //Api using cache
 const walletHoldings = async (req, res) => {
   try {
-    const { wallet_address } = req.query;
+    const { wallet_address,is_success } = req.query;
     if (!wallet_address) {
       return res.status(400).send(Response.sendResponse(false, null, 'Missing wallet address', 400));
     }
 
+
     const cacheKey = `wallet_holdings_${wallet_address.toLowerCase()}`;
     const cached = await redisClient.get(cacheKey);
+
+    if(is_success){
+      let finalList = await setWalletBalanceCache(wallet_address.toLowerCase(),cacheKey);
+      return res.status(200).send(Response.sendResponse(true, finalList, null, 200));
+    }
+
     if (cached) {
       console.log("📦 Serving from Redis");
       return res.status(200).send(Response.sendResponse(true, JSON.parse(cached), null, 200));
     }
 
-    // Step 1: Fetch from AvaCloud SDK
-    const result = await avaCloudSDK.data.evm.address.balances.listErc20({
-      address: wallet_address,
-      pageSize: 500,
-      filterSpamTokens: false,
-      currency: "usd",
-    });
-
-    const erc20Balances = result?.result?.erc20TokenBalances || [];
-
-    const tokensWithBalance = erc20Balances.filter(t => {
-      return t.balance && BigInt(t.balance) > 1n;
-    });
-
-    const tokenAddresses = tokensWithBalance.map(t => t.address.toLowerCase());
-
-    if (tokenAddresses.length === 0) {
-      await redisClient.set(cacheKey, JSON.stringify([]), 'EX', 120);
-      return res.status(200).send(Response.sendResponse(true, [], null, 200));
-    }
-
-    // Step 2: Match tokens in your DB
-    const dbTokens = await db.sequelize.query(
-      `
-      SELECT name, symbol, contract_address, lp_deployed
-      FROM "arena-trade-coins"
-      WHERE LOWER(contract_address) IN (:addresses)
-      `,
-      {
-        replacements: { addresses: tokenAddresses },
-        type: db.Sequelize.QueryTypes.SELECT,
-      }
-    );
-
-    const dbTokenMap = new Map(
-      dbTokens.map(t => [t.contract_address.toLowerCase(), t])
-    );
-
-    // Step 3: Merge + filter tokens with human balance >= 1
-    const finalList = tokensWithBalance
-      .map(t => {
-        const match = dbTokenMap.get(t.address.toLowerCase());
-        if (!match) return null;
-
-        const balance = parseFloat(t.balance) / 10 ** t.decimals;
-        if (balance < 1) return null;
-
-        return {
-          name: match.name || t.name,
-          symbol: match.symbol || t.symbol,
-          lp_deployed: match.lp_deployed || false,
-          contract_address: t.address,
-          balance,
-          logo: t.logoUri || null,
-        };
-      })
-      .filter(Boolean);
-
-      await redisClient.set(cacheKey, JSON.stringify(finalList), {
-        EX: 120,
-      });
+    let finalList = await setWalletBalanceCache(wallet_address.toLowerCase(),cacheKey);
       
     return res.status(200).send(Response.sendResponse(true, finalList, null, 200));
   } catch (err) {
