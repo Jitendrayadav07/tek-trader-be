@@ -38,8 +38,9 @@ const { Op, QueryTypes, where } = require("sequelize");
 const Web3 = require("web3");
 const web3 = new Web3();
 const fetchStarsArenaCommunities = require("../utils/starsArenaApi")
+const fetchStarsArenaHolderCommunities = require("../utils/starsArenaHolderCommunities")
 const formatCommunityData = require("../utils/communityUtils.js")
-const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js.js");
+const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js");
 const convertDexDataToCustomFormat = require('../utils/convertDexDataToProperFormat.js');
 const { isContractAddress } = require('../utils/checkContractAddress.js');
 const redisClient = require('../utils/redisClient.js');
@@ -1474,12 +1475,23 @@ const myHoldingTokens = async (req, res) => {
 const holdersTokens = async (req, res) => {
   try {
     const { pair_address } = req.params;
+    const { limit, offset } = req.query;
 
     if (!pair_address) {
-      return res.status(400).send(Response.sendResponse(false, null, "Contract address is required", 400));
+      return res
+        .status(400)
+        .send(Response.sendResponse(false, null, "Pair_address is required", 400));
     }
 
-    // 1. Get Token Info
+    const cacheKey = `holders_tokens_${pair_address.toLowerCase()}_${limit || 0}_${offset || 0}`;
+
+    const cached = await redisClient.get(cacheKey);
+    if (cached) {
+      return res
+        .status(200)
+        .send(Response.sendResponse(true, JSON.parse(cached), "Holders Data (cached)", 200));
+    }
+
     const tokenInfo = await db.sequelize.query(
       `
         SELECT internal_id, contract_address
@@ -1494,82 +1506,56 @@ const holdersTokens = async (req, res) => {
     );
 
     if (!tokenInfo.length) {
-      return res.status(404).send(Response.sendResponse(false, null, "Token not found", 404));
+      return res
+        .status(404)
+        .send(Response.sendResponse(false, null, "Token not found", 404));
     }
 
-    const tokenId = tokenInfo[0].internal_id;
-    const contractAddress = tokenInfo[0].contract_address;
+    const contract_address = tokenInfo[0].contract_address;
 
-    // 2. Get USD Price from DB
-    const priceResult = await db.sequelize.query(
-      `
-        SELECT price_after_usd
-        FROM arena_trades
-        WHERE token_id = :tokenId AND status = 'success'
-        ORDER BY timestamp DESC
-        LIMIT 1
-      `,
-      {
-        replacements: { tokenId },
-        type: db.Sequelize.QueryTypes.SELECT,
-      }
-    );
+    const communities = await fetchStarsArenaHolderCommunities(contract_address, offset, limit);
 
-    const priceUsd = priceResult.length ? parseFloat(priceResult[0].price_after_usd) : 0;
+    const contract = new ethers.Contract(contract_address, ERC20_ABI, provider);
+    const decimals = await contract.decimals();
 
-    // 3. Get All Addresses From DB Trades
-    const rawHolders = await db.sequelize.query(
-      `
-        SELECT DISTINCT LOWER(from_address) AS address
-        FROM arena_trades
-        WHERE token_id = :tokenId
-      `,
-      {
-        replacements: { tokenId },
-        type: db.Sequelize.QueryTypes.SELECT,
-      }
-    );
+    let holders = [];
+    if (communities?.holders?.length) {
+      holders = await Promise.all(
+        communities.holders.map(async (holder) => {
+          let balanceStr = "0";
+          try {
+            const balanceRaw = await contract.balanceOf(holder.address);
+            const balance = ethers.formatUnits(balanceRaw, decimals);
+            balanceStr = parseFloat(balance).toLocaleString("en-US");
+          } catch (err) {
+            console.error(`Error fetching balance for address ${holder.address}:`, err);
+          }
+          return {
+            address: holder.address,
+            balance: balanceStr,
+            percent_supply: holder.tokenRatio.toFixed(4) + "%"
+          };
+        })
+      );
 
-    // 4. Fetch On-Chain Data Using Ethers
-    const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/rpc");
-    const contract = new ethers.Contract(contractAddress, ERC20_ABI, provider);
-
-    const [totalSupplyRaw, decimals] = await Promise.all([
-      contract.totalSupply(),
-      contract.decimals()
-    ]);
-    const totalSupply = ethers.formatUnits(totalSupplyRaw, decimals);
-
-    const holders = [];
-
-    for (const { address } of rawHolders) {
-      const balanceRaw = await contract.balanceOf(address);
-      const balance = ethers.formatUnits(balanceRaw, decimals);
-      const balanceNum = parseFloat(balance);
-
-      if (balanceNum > 0) {
-        const usdValue = priceUsd * balanceNum;
-        const percentSupply = (balanceNum / parseFloat(totalSupply)) * 100;
-
-        holders.push({
-          address,
-          balance: balanceNum.toLocaleString("en-US"),
-          usd_value: `$${usdValue.toFixed(6)}`,
-          percent_supply: `${percentSupply.toFixed(4)}%`,
-        });
-      }
+      // Sort by balance descending and assign rank
+      holders = holders
+        .sort((a, b) => parseFloat(b.balance.replace(/,/g, '')) - parseFloat(a.balance.replace(/,/g, '')))
+        .map((holder, idx) => ({ ...holder, rank: idx + 1 }));
     }
 
-    // 5. Sort by Balance Desc
-    holders.sort((a, b) => parseFloat(b.balance.replace(/,/g, '')) - parseFloat(a.balance.replace(/,/g, '')));
+    await redisClient.set(cacheKey, JSON.stringify({ holders }), {
+      EX: 120,
+    });
 
-    const ranked = holders.map((holder, index) => ({ ...holder, rank: index + 1 }));
-
-    return res.status(200).send(Response.sendResponse(true, { holders: ranked }, "Holders Data", 200));
-
+    return res
+      .status(200)
+      .send(Response.sendResponse(true, { holders }, "Holders Data", 200));
   } catch (err) {
     console.error("holdersTokens error:", err);
-    return res.status(500).send(Response.sendResponse(false, null, "Internal Server Error", 500));
+    return res
+      .status(500)
+      .send(Response.sendResponse(false, null, "Internal Server Error", 500));
   }
 };
 
