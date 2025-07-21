@@ -1946,8 +1946,10 @@ const walletHoldings = async (req, res) => {
       })
       .filter(Boolean);
 
-    await redisClient.set(cacheKey, JSON.stringify(finalList), 'EX', 120);
-
+      await redisClient.set(cacheKey, JSON.stringify(finalList), {
+        EX: 120,
+      });
+      
     return res.status(200).send(Response.sendResponse(true, finalList, null, 200));
   } catch (err) {
     console.error("❌ Error in walletHoldings:", err.message);
