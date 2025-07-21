@@ -47,6 +47,7 @@ const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/r
 const { sumAmountByAction, getSupplyEth } = require('../utils/calculateMarketCap');
 const { getLastestAvaxPrice } = require('../services/getLatestAvaxPrice.js');
 const { getSumOfTotalBuyAndSell } = require('../utils/calculatingPriceEth.js');
+const { fetchStarsArenaTopCommunities, transformTokenData } = require('../utils/StarsArenaTopCommunities.js');
 
 /**
  * Utility to sum token amounts by action type
@@ -71,6 +72,55 @@ const recentTokens = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = parseInt(req.query.offset) || 0;
     const search = req.query.search || "";
+    const filter = req.query.filter || "";
+
+    if(filter === "bonded") {
+      const cacheKey = 'bonded_tokens_data';
+      const cacheExpiration = 15 * 60; // 15 minutes in seconds
+      
+      try {
+        // Check if data exists in Redis cache
+        const cachedData = await redisClient.get(cacheKey);
+        
+        if (cachedData) {
+          console.log("cached")
+          console.log('📦 Returning cached bonded tokens data');
+          const parsedData = JSON.parse(cachedData);
+          return res.status(200).send(Response.sendResponse(true, parsedData, null, 200));
+        }
+        
+        console.log('🔄 Fetching fresh bonded tokens data from API');
+        
+        /**
+         * API response from fetchStarsArenaTopCommunities
+         * @type {import("../utils/StarsArenaTopCommunities.js").StarsArenaTopCommunitiesResponse}
+         */
+        let apiResponse = await fetchStarsArenaTopCommunities(1, 50);
+        console.log("API Response sample:", apiResponse[0]);
+        
+        let transformedData = await transformTokenData(apiResponse);
+        
+        // Cache the transformed data for 15 minutes
+        await redisClient.setEx(cacheKey, cacheExpiration, JSON.stringify(transformedData));
+        console.log('💾 Cached bonded tokens data for 15 minutes');
+        
+        return res.status(200).send(Response.sendResponse(true, transformedData, null, 200));
+        
+      } catch (cacheError) {
+        console.error('❌ Redis cache error:', cacheError.message);
+        
+        // Fallback: fetch data without caching if Redis fails
+        try {
+          console.log('🔄 Fallback: Fetching data without cache');
+          let apiResponse = await fetchStarsArenaTopCommunities(1, 50);
+          let transformedData = await transformTokenData(apiResponse);
+          return res.status(200).send(Response.sendResponse(true, transformedData, null, 200));
+        } catch (apiError) {
+          console.error('❌ API fallback error:', apiError.message);
+          return res.status(500).send(Response.sendResponse(false, null, 'Failed to fetch bonded tokens data', 500));
+        }
+      }
+    }
 
     const whereCondition = search
       ? {
@@ -474,8 +524,9 @@ const pairTokenDataNew = async (req, res) => {
 // here search would be the contract address
 const fetchDexScreenerData = async (search, from = null) => {
   let url = ''
-  if (from)
+  if (from){
     url = `https://api.dexscreener.com/latest/dex/search?q=`
+  }
   else {
     url = `https://api.dexscreener.com/latest/dex/search?q=AVAX/ARENATRADE`;
   }

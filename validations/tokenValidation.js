@@ -5,6 +5,7 @@ const tokenSchema = {
         limit: Joi.number().integer().min(1).max(100).default(10).required(),
         offset: Joi.number().integer().min(0).default(0).required(),
         search: Joi.string().optional().allow(''),
+        filter: Joi.string().optional().allow(''),
     }),
 
     myHoldingTokensSchema: Joi.object().keys({
