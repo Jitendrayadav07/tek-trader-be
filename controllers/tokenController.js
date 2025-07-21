@@ -40,7 +40,7 @@ const web3 = new Web3();
 const fetchStarsArenaCommunities = require("../utils/starsArenaApi")
 const fetchStarsArenaHolderCommunities = require("../utils/starsArenaHolderCommunities")
 const formatCommunityData = require("../utils/communityUtils.js")
-const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js");
+// const StarsArenaTopCommunities = require("../utils/StarsArenaTopCommunities.js");
 const convertDexDataToCustomFormat = require('../utils/convertDexDataToProperFormat.js');
 const { isContractAddress } = require('../utils/checkContractAddress.js');
 const redisClient = require('../utils/redisClient.js');
@@ -48,6 +48,7 @@ const provider = new ethers.JsonRpcProvider("https://api.avax.network/ext/bc/C/r
 const { sumAmountByAction, getSupplyEth } = require('../utils/calculateMarketCap');
 const { getLastestAvaxPrice } = require('../services/getLatestAvaxPrice.js');
 const { getSumOfTotalBuyAndSell } = require('../utils/calculatingPriceEth.js');
+const { fetchStarsArenaTopCommunities, transformTokenData } = require('../utils/StarsArenaTopCommunities.js');
 
 /**
  * Utility to sum token amounts by action type
@@ -69,11 +70,56 @@ const ERC20_ABI = [
 
 const recentTokens = async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = parseInt(req.query.offset) || 0;
+    let limit = parseInt(req.query.limit) || 10;
+    let offset = parseInt(req.query.offset) || 0;
     const search = req.query.search || "";
+    const filter = req.query.filter || "";
+    if(filter === "Bonded") {
+      if (offset < 1) offset = 1;
+      const cacheKey = `bonded_tokens_data_page_${offset}_limit_${limit}`;
+      const cacheExpiration = 15 * 60; // 15 minutes in seconds
+      
+      try {
+        // Check if data exists in Redis cache
+        const cachedData = await redisClient.get(cacheKey);
+        
+        if (cachedData) {
+          console.log("cached")
+          console.log('📦 Returning cached bonded tokens data');
+          const {items} = JSON.parse(cachedData);
+          // const responseList = parsedData.slice(offset, offset + limit);
+          return res.status(200).send(Response.sendResponse(true, { offset, limit, items }, null, 200));
+        }
+        
+        console.log('🔄 Fetching fresh bonded tokens data from API');
+        
+        /**
+         * API response from fetchStarsArenaTopCommunities
+         * @type {import("../utils/StarsArenaTopCommunities.js").StarsArenaTopCommunitiesResponse}
+         */
+        let apiResponse = await fetchStarsArenaTopCommunities(offset, limit);
+        let items = await transformTokenData(apiResponse);
+        
+        // Cache the transformed data for 15 minutes
+        await redisClient.set(cacheKey, JSON.stringify({items}), { EX: cacheExpiration });
+        console.log('💾 Cached bonded tokens data for 15 minutes');
+        return res.status(200).send(Response.sendResponse(true, { offset, limit, items }, null, 200));
+        
+      } catch (cacheError) {
+        // Fallback: fetch data without caching if Redis fails
+        try {
+          console.log('🔄 Fallback: Fetching data without cache');
+          let apiResponse = await fetchStarsArenaTopCommunities(offset, limit);
+          let items = await transformTokenData(apiResponse);
 
-    const whereCondition = search
+          return res.status(200).send(Response.sendResponse(true, { offset, limit, items }, null, 200));
+        } catch (apiError) {
+          console.error('❌ API fallback error:', apiError.message);
+          return res.status(500).send(Response.sendResponse(false, null, 'Failed to fetch bonded tokens data', 500));
+        }
+      }
+    }else{
+      const whereCondition = search
       ? {
         [Op.or]: [
           { name: { [Op.iLike]: `%${search}%` } },
@@ -174,6 +220,7 @@ const recentTokens = async (req, res) => {
         return {
           row_id: token.id,
           tokens: tokens.ip_deployed,
+          tokens_by_creator : tokens_by_creator,
           creator_address: token.creator_address?.toLowerCase(),
           contract_address: process.env.CONTRACT_ADDRESS,
           token_id: token.internal_id.toString(),
@@ -222,6 +269,7 @@ const recentTokens = async (req, res) => {
     return res.status(200).send(
       Response.sendResponse(true, { offset, limit, items: responseList }, null, 200)
     );
+    }
   } catch (err) {
     console.error("Error in recentTokens:", err);
     return res
@@ -774,7 +822,7 @@ const tokenListTokens = async (req, res) => {
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
     } else {
       const { page, pageSize } = req.query;
-      const communities = await StarsArenaTopCommunities(page, pageSize);
+      const communities = await fetchStarsArenaTopCommunities(page, pageSize);
       const response = formatCommunityData(communities);
 
       return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
@@ -1533,6 +1581,7 @@ const holdersTokens = async (req, res) => {
           return {
             address: holder.address,
             balance: balanceStr,
+            user_name : holder.user,
             percent_supply: holder.tokenRatio.toFixed(4) + "%"
           };
         })
@@ -1733,7 +1782,7 @@ const tokenOhlcData = async (req, res) => {
 const communitiesTopController = async (req, res) => {
   try {
     const { page, pageSize } = req.query;
-    const communities = await StarsArenaTopCommunities(page, pageSize);
+    const communities = await fetchStarsArenaTopCommunities(page, pageSize);
     const response = formatCommunityData(communities);
     return res.status(200).send({ isSuccess: true, result: response, message: null, statusCode: 200 });
   } catch (err) {
