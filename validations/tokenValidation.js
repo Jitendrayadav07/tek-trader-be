@@ -52,6 +52,7 @@ const tokenSchema = {
     }),
     walletHoldingsSchema: Joi.object().keys({
         wallet_address: Joi.string().required(),
+        is_success: Joi.boolean(),
     }),
 
     listOfTokenSchema :  Joi.object().keys({
