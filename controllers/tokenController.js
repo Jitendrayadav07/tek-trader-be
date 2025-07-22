@@ -532,7 +532,7 @@ const fetchDexScreenerData = async (search, from = null) => {
     url = url + `/${search}`
 
   const response = await axiosInstance.get(url);
-  const avalanchePairs = response.data.pairs.filter(pair => pair.dexId === "arenatrade");
+  const avalanchePairs = response.data.pairs.filter(pair => pair.dexId === "arenatrade" && pair.baseToken.name !== "ArenaToken");
   return avalanchePairs;
 };
 
@@ -1212,7 +1212,8 @@ GROUP BY
             LIMIT 1
         ) t ON true
         LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-        WHERE c.name ILIKE :search OR c.symbol ILIKE :search
+       WHERE (c.name ILIKE 'green%' OR c.symbol ILIKE 'green%')
+        AND t.price_after_usd < 1
         ORDER BY 
         c.lp_deployed DESC, 
         marketCap DESC
