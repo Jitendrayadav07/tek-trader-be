@@ -2091,6 +2091,33 @@ const getTradeChangePercentage = async (req, res) => {
   }
 }
 
+const getCurrentTokenPrice = async (req, res) => {
+  try {
+    const { contract_address } = req.query;
+    
+    if (!contract_address) {
+      return res.status(400).send(Response.sendResponse(false, null, 'Contract address is required', 400));
+    }
+    
+    const apiUrl = `https://api.arenapro.io/token_trades_view?token_contract_address=eq.${contract_address}&order=absolute_order.desc&limit=1&offset=0`;
+    
+    const response = await axiosInstance.get(apiUrl);
+
+    const latestAvaxPrice = await getLastestAvaxPrice();
+
+    if (response.data && response.data.length > 0) {  
+      let latest_price = response.data[0].price_after_usd;
+      return res.status(200).send(Response.sendResponse(true, {latest_price_eth: latest_price, latest_avax_price: latestAvaxPrice[0].price}, null, 200));
+    } else {
+      return res.status(404).send(Response.sendResponse(false, null, 'No trade data found for this token', 404));
+    }
+    
+  } catch (error) {
+    console.error('Error in getCurrentTokenPrice:', error.message);
+    return res.status(500).send(Response.sendResponse(false, null, 'Failed to fetch token price data', 500));
+  }
+} 
+
 
 module.exports = {
   recentTokens,
@@ -2111,5 +2138,6 @@ module.exports = {
   tokenListArenaPro,
   tokenListTokensMerged,
   liquidityStatus,
-  getTradeChangePercentage
+  getTradeChangePercentage,
+  getCurrentTokenPrice
 }

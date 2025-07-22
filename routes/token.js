@@ -9,9 +9,10 @@ router.get("/recent-tokens",
     JoiMiddleWare(tokenSchema.recentTokens, "query"),
     tokenController.recentTokens);
 
+
 router.get("/pair-token-details/avalanche/:pairId",
     tokenController.pairTokenData);
-
+    
 router.get("/pair-token-details-new/avalanche/:pairId",
     tokenController.pairTokenDataNew);
 
@@ -66,6 +67,11 @@ router.get("/wallet-holdings",
 router.get("/liquidity-status/:pair_address",
     JoiMiddleWare(tokenSchema.liquidityStatus, "params"),
     tokenController.liquidityStatus);
+
+
+router.get("/get-current-token-price",
+    // JoiMiddleWare(tokenSchema.liquidityStatus, "params"),
+    tokenController.getCurrentTokenPrice);
 
 
 module.exports = router;
