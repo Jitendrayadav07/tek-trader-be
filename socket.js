@@ -1,6 +1,6 @@
-const { block } = require("sharp");
-const { Server } = require("socket.io");
 
+const { Server } = require("socket.io");
+const redisClient = require('./utils/redisClient.js');
 const connectedUsers = new Map();               // socket.id -> userId
 const userMessageTimestamps = new Map();        // userId -> [timestamps]
 const blockedUsers = new Map();                 // userId -> blockUntil timestamp
@@ -13,8 +13,8 @@ function initSocket(server) {
       methods: ["GET", "POST"],
     },
   });
-  
-  io.on("connection", (socket) => {
+
+  io.on("connection", async (socket) => {
     const userId = socket.handshake.auth.userId;
 
 
@@ -30,26 +30,29 @@ function initSocket(server) {
     io.emit("user_joined", { userId });
     io.emit("update_user_count", connectedUsers.size);
 
-    socket.on("send_message", (data) => {
+    // ✅ Fetch global chat history
+    try {
+      const messages = await redisClient.lRange("chat:global", 0, -1);
+      const parsed = messages.map(m => JSON.parse(m));
+      socket.emit("load_previous_messages", parsed);
+    } catch (err) {
+      console.error("Redis load error:", err);
+    }
+
+    socket.on("send_message", async (data) => {
       const now = Date.now();
 
-      // 🛑 Check if user is blocked
       const blockedUntil = blockedUsers.get(userId);
       if (blockedUntil && now < blockedUntil) {
-        console.log("you are blocked !")
         socket.emit("rate_limit_blocked", "You are temporarily blocked for spamming. Try again later.");
         return;
       }
 
       const timestamps = userMessageTimestamps.get(userId) || [];
-
-      // Filter last 10 seconds
       const recent = timestamps.filter(ts => now - ts < 10000);
 
       if (recent.length >= 5) {
         socket.emit("rate_limit_warning", "You're sending messages too fast. You are now blocked for 1 minute.");
-
-        // 🛑 Block user for 1 minute
         blockedUsers.set(userId, now + 60000);
         return;
       }
@@ -57,20 +60,34 @@ function initSocket(server) {
       recent.push(now);
       userMessageTimestamps.set(userId, recent);
 
-      // Broadcast clean message
-      socket.broadcast.emit("receive_message", data);
+      // ✅ Save message to Redis with TTL
+      const redisKey = `chat:global`;
+      const message = {
+        username: data.username,
+        message: data.message,
+        sender: userId,
+        timestamp: now,
+      };
+
+      try {
+        await redisClient.rPush(redisKey, JSON.stringify(message));
+        await redisClient.expire(redisKey, 1800); // 30 minutes = 1800 seconds
+      } catch (err) {
+        console.error("Redis error:", err);
+      }
+
+      // Broadcast to others
+      socket.broadcast.emit("receive_message", message);
     });
 
     socket.on("disconnect", () => {
       const username = connectedUsers.get(socket.id);
-
       if (username) {
         io.emit("user_left", { userId: username });
         connectedUsers.delete(socket.id);
         io.emit("update_user_count", connectedUsers.size);
       }
 
-      console.log(`❌ User disconnected: ${socket.id} (userId: ${userId})`);
     });
   });
 
