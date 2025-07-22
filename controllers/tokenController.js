@@ -108,7 +108,7 @@ const recentTokens = async (req, res) => {
       } catch (cacheError) {
         // Fallback: fetch data without caching if Redis fails
         try {
-          console.log('🔄 Fallback: Fetching data without cache');
+          console.log('🔄 Fallback: Fetching data without cache', cacheError);
           let apiResponse = await fetchStarsArenaTopCommunities(offset, limit);
           let items = await transformTokenData(apiResponse);
 
@@ -1212,7 +1212,7 @@ GROUP BY
             LIMIT 1
         ) t ON true
         LEFT JOIN token_metadata tm ON c.contract_address = tm.contract_address
-       WHERE (c.name ILIKE 'green%' OR c.symbol ILIKE 'green%')
+       WHERE (c.name ILIKE :search OR c.symbol ILIKE :search)
         AND t.price_after_usd < 1
         ORDER BY 
         c.lp_deployed DESC, 
