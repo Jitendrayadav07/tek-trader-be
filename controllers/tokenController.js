@@ -2094,28 +2094,15 @@ const getTradeChangePercentage = async (req, res) => {
 const getCurrentTokenPrice = async (req, res) => {
   try {
     const { contract_address } = req.query;
-    
+
     if (!contract_address) {
       return res.status(400).send(Response.sendResponse(false, null, 'Contract address is required', 400));
     }
-    let lowerCase = contract_address.toLowerCase();
-    
-    const apiUrl = `https://api.arenapro.io/token_trades_view?token_contract_address=eq.${lowerCase}&order=absolute_order.desc&limit=1&offset=0`;
-    
-    const response = await axiosInstance.get(apiUrl);
-
-    // console.log("Res", response)
-
     const latestAvaxPrice = await getLastestAvaxPrice();
 
-    if (response.data && response.data.length > 0) {  
-      let latest_price = response.data[0].price_after_usd;
-      // let avax_price = response.data[0].avax_price;
-      return res.status(200).send(Response.sendResponse(true, {latest_price_usd: latest_price, latest_avax_price: latestAvaxPrice[0].price}, null, 200));
-    } else {
-      return res.status(404).send(Response.sendResponse(false, null, 'No trade data found for this token', 404));
-    }
-    
+    return res.status(200).send(Response.sendResponse(true, { latest_avax_price: latestAvaxPrice[0].price }, null, 200));
+
+
   } catch (error) {
     console.error('Error in getCurrentTokenPrice:', error.message);
     return res.status(500).send(Response.sendResponse(false, null, 'Failed to fetch token price data', 500));
