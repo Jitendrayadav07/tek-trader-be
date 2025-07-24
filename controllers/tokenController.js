@@ -330,6 +330,10 @@ const pairTokenDataNew = async (req, res) => {
       }
     );
 
+    const tokens_by_creator = await db.ArenaTradeCoins.count({
+      where: { creator_address: token.creator_address },
+    });
+
     // 🟩 Calculate latest_supply_eth using BigInt
     const initialBuyAmount = sumAmountByAction(token_data, "initial buy");
 
@@ -504,6 +508,7 @@ const pairTokenDataNew = async (req, res) => {
         participants,
         buySellVolume: buySellVolume_usd,
         holders: latest_holder_count,
+        tokens_by_creator: tokens_by_creator,
         info: {
           imageUrl: imageUrl,
         },
