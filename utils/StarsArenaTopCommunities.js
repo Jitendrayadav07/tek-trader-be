@@ -100,6 +100,8 @@ const transformTokenData = async (data) => {
       marketCap: Number(token.stats?.marketCap || 0) ,
       lastMarketCap: 0,
       marketCapUsd: token.stats?.marketCapUsd || 0 ,
+      volume: Number(token.stats?.buyVolume || 0) + Number(token.stats?.sellVolume || 0),
+      market_cap: token.stats?.marketCapUsd || 0 ,
     };
   }));
 }
