@@ -110,6 +110,7 @@ const recentTokens = async (req, res) => {
         try {
           console.log('🔄 Fallback: Fetching data without cache', cacheError);
           let apiResponse = await fetchStarsArenaTopCommunities(offset, limit);
+          console.log('API response received:@@@@@@@@', apiResponse);
           let items = await transformTokenData(apiResponse);
 
           return res.status(200).send(Response.sendResponse(true, { offset, limit, items }, null, 200));
@@ -216,6 +217,21 @@ const recentTokens = async (req, res) => {
         });
         // latest_supply_eth: Number(latest_supply_eth.toFixed(6)),
         // latest_price_usd: Number(latest_price_usd.toFixed(12)),
+        let market_cap = null;
+        let volume = null;
+        if (token.lp_deployed === true && token.pair_address) {
+          try {
+            const pairId = token.pair_address;
+            const url = `https://api.dexscreener.com/latest/dex/pairs/avalanche/${pairId}`;
+            const { data } = await axios.get(url);
+            if (data.pair) {
+                market_cap = data.pair.marketCap;
+                volume = data.pair.volume.h24;
+            }
+          } catch (err) {
+            console.error('Dexscreener API error:', err.message);
+          }
+        }
 
         return {
           row_id: token.id,
@@ -262,6 +278,8 @@ const recentTokens = async (req, res) => {
           dexscreener_website: null,
           dexscreener_social: null,
           dexscreener_last_updated: null,
+          market_cap,
+          volume
         };
       })
     );
