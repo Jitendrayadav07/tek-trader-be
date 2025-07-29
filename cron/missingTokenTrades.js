@@ -145,6 +145,7 @@ const runBatchJob = async () => {
           [Op.lte]: endId
         },
         contract_address: { [Op.ne]: null },
+        lp_deployed : false,
       },
       attributes: ['internal_id', 'contract_address']
     });
