@@ -2,8 +2,8 @@
 module.exports = (sequelize , DataTypes) => {
     const shillCategory = sequelize.define('shill_categories', {
       id: {
-        type: DataTypes.UUID,
-        defaultValue: DataTypes.UUIDV4,
+        type: DataTypes.INTEGER,
+        autoIncrement: true,
         primaryKey: true,
       },
       shill_category:{

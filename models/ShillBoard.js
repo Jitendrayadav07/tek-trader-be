@@ -7,40 +7,23 @@ module.exports = (sequelize , DataTypes) => {
         defaultValue: DataTypes.UUIDV4,
         primaryKey: true,
       },
+      contract_address: {
+        type: DataTypes.STRING,
+      },
+      start_time: {
+        type: DataTypes.DATE,
+      },
+      end_time: {
+        type: DataTypes.DATE,
+      },
       shill_category_id: {
-        type: DataTypes.UUID,
+        type: DataTypes.INTEGER,
         allowNull: true,
         references: {
           model: 'shill_categories',
           key: 'id'
         }
-      },
-      txn_hash: {
-        type: DataTypes.STRING,
-      },
-      contract_address: {
-        type: DataTypes.STRING,
-      },
-      image_url: {
-        type: DataTypes.STRING,
-      },
-      sender_address: {
-        type: DataTypes.STRING,
-      },
-      upvote : {
-        type: DataTypes.INTEGER,
-        defaultValue: 0,
-      },
-      downvote : {
-        type: DataTypes.INTEGER,
-        defaultValue: 0,
-      },
-      description : {
-        type: DataTypes.STRING,
-      },
-      end_date_time : {
-        type: DataTypes.DATE,
-      },
+      }
     },{
       freezeTableName: true,
       timestamps: true,

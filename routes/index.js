@@ -7,11 +7,13 @@ const shillCategoryRoutes = require("./shillCategoryRoutes");
 const shillBoardRoutes = require("./shillBoardRoutes");
 const tokenRoutes = require("./token");
 const userWalletRoutes = require("./userWalletRoutes")
+const votesRoutes = require("./votesRoutes");
 
-router.use("/shill_category",shillCategoryRoutes);
-router.use("/shill_board",shillBoardRoutes);
+router.use("/shill-category",shillCategoryRoutes);
+router.use("/shill-board",shillBoardRoutes);
 router.use("/tokens",tokenRoutes);
 router.use("/user-wallet",userWalletRoutes)
+router.use("/votes",votesRoutes);
 
 
 module.exports = router;
